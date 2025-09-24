@@ -9,8 +9,34 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Separator } from "@/components/ui/separator"
 import { Badge } from "@/components/ui/badge"
 import { Bell, Shield, User, Globe, Smartphone, Mail, Lock } from "lucide-react"
+import { createClient } from "@/lib/supabase/server"
+import { redirect } from "next/navigation"
 
-export default function SettingsPage() {
+async function getUserProfile(userId: string) {
+  const supabase = await createClient()
+
+  const { data: profile } = await supabase.from("profiles").select("*").eq("id", userId).single()
+
+  return profile
+}
+
+export default async function SettingsPage() {
+  const supabase = await createClient()
+  const {
+    data: { user },
+    error,
+  } = await supabase.auth.getUser()
+
+  if (error || !user) {
+    redirect("/auth/login")
+  }
+
+  const profile = await getUserProfile(user.id)
+
+  if (!profile) {
+    redirect("/auth/login")
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -40,53 +66,67 @@ export default function SettingsPage() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="firstName">First Name</Label>
-                  <Input id="firstName" defaultValue="John" />
+                  <Input id="firstName" defaultValue={profile.first_name || ""} />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="lastName">Last Name</Label>
-                  <Input id="lastName" defaultValue="Doe" />
+                  <Input id="lastName" defaultValue={profile.last_name || ""} />
                 </div>
               </div>
 
               <div className="space-y-2">
                 <Label htmlFor="email">Email Address</Label>
-                <Input id="email" type="email" defaultValue="john.doe@example.com" />
+                <Input id="email" type="email" defaultValue={user.email || ""} disabled />
+                <p className="text-xs text-muted-foreground">Email cannot be changed from this page</p>
               </div>
 
               <div className="space-y-2">
                 <Label htmlFor="phone">Phone Number</Label>
-                <Input id="phone" defaultValue="+234 801 234 5678" />
+                <Input id="phone" defaultValue={profile.phone || ""} />
               </div>
 
               <div className="space-y-2">
                 <Label htmlFor="bio">Bio</Label>
-                <Textarea
-                  id="bio"
-                  placeholder="Tell us about yourself..."
-                  defaultValue="Experienced International Arbiter with over 6 years in competitive chess arbitration."
-                />
+                <Textarea id="bio" placeholder="Tell us about yourself..." defaultValue={profile.bio || ""} />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="city">City</Label>
+                  <Input id="city" defaultValue={profile.city || ""} />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="state">State</Label>
+                  <Input id="state" defaultValue={profile.state || ""} />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="country">Country</Label>
+                  <Input id="country" defaultValue={profile.country || "Nigeria"} />
+                </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="zone">Zone</Label>
-                  <Select defaultValue="zone-4-1">
+                  <Select defaultValue={profile.zone || ""}>
                     <SelectTrigger>
-                      <SelectValue />
+                      <SelectValue placeholder="Select your zone" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="zone-4-1">Zone 4.1 - Lagos</SelectItem>
-                      <SelectItem value="zone-4-2">Zone 4.2 - Abuja</SelectItem>
-                      <SelectItem value="zone-4-3">Zone 4.3 - Kano</SelectItem>
-                      <SelectItem value="zone-4-4">Zone 4.4 - Port Harcourt</SelectItem>
+                      <SelectItem value="zone_4_1">Zone 4.1 - Lagos</SelectItem>
+                      <SelectItem value="zone_4_2">Zone 4.2 - Abuja</SelectItem>
+                      <SelectItem value="zone_4_3">Zone 4.3 - Kano</SelectItem>
+                      <SelectItem value="zone_4_4">Zone 4.4 - Port Harcourt</SelectItem>
+                      <SelectItem value="zone_4_5">Zone 4.5 - Ibadan</SelectItem>
+                      <SelectItem value="zone_4_6">Zone 4.6 - Enugu</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="title">Arbiter Title</Label>
-                  <Select defaultValue="international">
+                  <Select defaultValue={profile.arbiter_level || ""}>
                     <SelectTrigger>
-                      <SelectValue />
+                      <SelectValue placeholder="Select your title" />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="candidate">Candidate Arbiter</SelectItem>
@@ -95,6 +135,28 @@ export default function SettingsPage() {
                       <SelectItem value="international">International Arbiter</SelectItem>
                     </SelectContent>
                   </Select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="experience">Years of Experience</Label>
+                  <Input id="experience" type="number" defaultValue={profile.years_experience || ""} min="0" max="50" />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="license">License Number</Label>
+                  <Input id="license" defaultValue={profile.license_number || ""} />
+                </div>
+              </div>
+
+              <div className="flex items-center gap-4">
+                <div className="flex items-center space-x-2">
+                  <Switch id="active" defaultChecked={profile.is_active} />
+                  <Label htmlFor="active">Active Status</Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Switch id="verified" defaultChecked={profile.is_verified} disabled />
+                  <Label htmlFor="verified">Verified Account</Label>
                 </div>
               </div>
 
@@ -151,6 +213,22 @@ export default function SettingsPage() {
                   </div>
                   <Switch />
                 </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>Committee Updates</Label>
+                    <p className="text-sm text-muted-foreground">Meeting schedules and committee announcements</p>
+                  </div>
+                  <Switch defaultChecked />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>Event Reminders</Label>
+                    <p className="text-sm text-muted-foreground">Reminders for upcoming events and deadlines</p>
+                  </div>
+                  <Switch defaultChecked />
+                </div>
               </div>
 
               <Separator />
@@ -170,6 +248,14 @@ export default function SettingsPage() {
                   <div className="flex items-center gap-2">
                     <Smartphone className="w-4 h-4" />
                     <Label>Push Notifications</Label>
+                  </div>
+                  <Switch defaultChecked />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Bell className="w-4 h-4" />
+                    <Label>In-App Notifications</Label>
                   </div>
                   <Switch defaultChecked />
                 </div>
@@ -222,6 +308,19 @@ export default function SettingsPage() {
                     </Button>
                   </div>
                 </div>
+
+                <div className="flex items-center justify-between p-4 border rounded-lg">
+                  <div>
+                    <p className="font-medium">Email Authentication</p>
+                    <p className="text-sm text-muted-foreground">Receive verification codes via email</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge variant="default">Enabled</Badge>
+                    <Button variant="outline" size="sm">
+                      Disable
+                    </Button>
+                  </div>
+                </div>
               </div>
 
               <Separator />
@@ -232,18 +331,40 @@ export default function SettingsPage() {
                   <div className="flex items-center justify-between p-3 border rounded-lg">
                     <div>
                       <p className="font-medium">Current Session</p>
-                      <p className="text-sm text-muted-foreground">Chrome on Windows • Lagos, Nigeria</p>
+                      <p className="text-sm text-muted-foreground">Web Browser • Last active now</p>
                     </div>
                     <Badge variant="default">Active</Badge>
                   </div>
                   <div className="flex items-center justify-between p-3 border rounded-lg">
                     <div>
-                      <p className="font-medium">Mobile App</p>
-                      <p className="text-sm text-muted-foreground">iOS App • Last active 2 hours ago</p>
+                      <p className="font-medium">Mobile Device</p>
+                      <p className="text-sm text-muted-foreground">Mobile App • Last active 2 hours ago</p>
                     </div>
                     <Button variant="outline" size="sm">
                       Revoke
                     </Button>
+                  </div>
+                </div>
+              </div>
+
+              <Separator />
+
+              <div className="space-y-4">
+                <h4 className="font-medium">Account Security</h4>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="font-medium">Login Alerts</p>
+                      <p className="text-sm text-muted-foreground">Get notified of new login attempts</p>
+                    </div>
+                    <Switch defaultChecked />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="font-medium">Suspicious Activity Monitoring</p>
+                      <p className="text-sm text-muted-foreground">Monitor for unusual account activity</p>
+                    </div>
+                    <Switch defaultChecked />
                   </div>
                 </div>
               </div>
@@ -286,6 +407,7 @@ export default function SettingsPage() {
                     <SelectContent>
                       <SelectItem value="africa-lagos">Africa/Lagos (WAT)</SelectItem>
                       <SelectItem value="utc">UTC</SelectItem>
+                      <SelectItem value="africa-cairo">Africa/Cairo (EET)</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -300,6 +422,20 @@ export default function SettingsPage() {
                       <SelectItem value="dd-mm-yyyy">DD/MM/YYYY</SelectItem>
                       <SelectItem value="mm-dd-yyyy">MM/DD/YYYY</SelectItem>
                       <SelectItem value="yyyy-mm-dd">YYYY-MM-DD</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Currency</Label>
+                  <Select defaultValue="ngn">
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ngn">Nigerian Naira (₦)</SelectItem>
+                      <SelectItem value="usd">US Dollar ($)</SelectItem>
+                      <SelectItem value="eur">Euro (€)</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -332,6 +468,14 @@ export default function SettingsPage() {
                     <p className="text-sm text-muted-foreground">
                       Automatically refresh dashboard data every 5 minutes
                     </p>
+                  </div>
+                  <Switch defaultChecked />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>Show Tooltips</Label>
+                    <p className="text-sm text-muted-foreground">Display helpful tooltips throughout the app</p>
                   </div>
                   <Switch defaultChecked />
                 </div>
@@ -384,6 +528,22 @@ export default function SettingsPage() {
                   </div>
                   <Switch />
                 </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>Performance Statistics</Label>
+                    <p className="text-sm text-muted-foreground">Share your performance metrics with other arbiters</p>
+                  </div>
+                  <Switch defaultChecked />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>Location Information</Label>
+                    <p className="text-sm text-muted-foreground">Show your city and state in your profile</p>
+                  </div>
+                  <Switch defaultChecked />
+                </div>
               </div>
 
               <Separator />
@@ -395,9 +555,40 @@ export default function SettingsPage() {
                   <Button variant="outline" className="w-full justify-start bg-transparent">
                     Download My Data
                   </Button>
+                  <p className="text-xs text-muted-foreground">
+                    Download a copy of all your personal data stored in our system
+                  </p>
+                </div>
+
+                <div className="space-y-3">
                   <Button variant="outline" className="w-full justify-start bg-transparent">
                     Request Data Deletion
                   </Button>
+                  <p className="text-xs text-muted-foreground">
+                    Request permanent deletion of your account and all associated data
+                  </p>
+                </div>
+              </div>
+
+              <Separator />
+
+              <div className="space-y-4">
+                <h4 className="font-medium">Communication Preferences</h4>
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>Marketing Communications</Label>
+                    <p className="text-sm text-muted-foreground">Receive updates about new features and events</p>
+                  </div>
+                  <Switch />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>Research Participation</Label>
+                    <p className="text-sm text-muted-foreground">Participate in surveys to improve our services</p>
+                  </div>
+                  <Switch />
                 </div>
               </div>
 

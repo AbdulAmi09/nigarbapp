@@ -16,89 +16,34 @@ import {
   XCircle,
   AlertCircle,
 } from "lucide-react"
+import { createClient } from "@/lib/supabase/server"
+import { redirect } from "next/navigation"
 
-export default function PaymentsPage() {
-  const payments = [
-    {
-      id: "PAY-2024-001",
-      tournament: "Lagos State Championship",
-      amount: "₦50,000",
-      date: "Dec 18, 2024",
-      dueDate: "Dec 20, 2024",
-      status: "paid",
-      method: "Bank Transfer",
-      reference: "TXN-LSC-2024-001",
-      type: "tournament_fee",
-    },
-    {
-      id: "PAY-2024-002",
-      tournament: "National Youth Tournament",
-      amount: "₦35,000",
-      date: "Jan 25, 2025",
-      dueDate: "Jan 30, 2025",
-      status: "pending",
-      method: "Pending",
-      reference: "TXN-NYT-2025-002",
-      type: "tournament_fee",
-    },
-    {
-      id: "PAY-2024-003",
-      tournament: "Annual Membership Fee",
-      amount: "₦10,000",
-      date: "Jan 1, 2025",
-      dueDate: "Jan 31, 2025",
-      status: "overdue",
-      method: "Pending",
-      reference: "TXN-MEM-2025-003",
-      type: "membership",
-    },
-    {
-      id: "PAY-2024-004",
-      tournament: "FIDE Arbiters Seminar",
-      amount: "₦25,000",
-      date: "Jan 8, 2025",
-      dueDate: "Jan 10, 2025",
-      status: "processing",
-      method: "Card Payment",
-      reference: "TXN-FAS-2025-004",
-      type: "training",
-    },
-    {
-      id: "PAY-2024-005",
-      tournament: "Abuja Open Tournament",
-      amount: "₦25,000",
-      date: "Nov 30, 2024",
-      dueDate: "Dec 5, 2024",
-      status: "paid",
-      method: "Bank Transfer",
-      reference: "TXN-AO-2024-005",
-      type: "tournament_fee",
-    },
-  ]
+async function getPaymentData(userId: string) {
+  const supabase = await createClient()
 
-  const paymentMethods = [
-    {
-      id: 1,
-      type: "Bank Transfer",
-      details: "First Bank Nigeria - 1234567890",
-      status: "active",
-      default: true,
-    },
-    {
-      id: 2,
-      type: "Card Payment",
-      details: "**** **** **** 1234",
-      status: "active",
-      default: false,
-    },
-    {
-      id: 3,
-      type: "Mobile Money",
-      details: "MTN Mobile Money - 08012345678",
-      status: "active",
-      default: false,
-    },
-  ]
+  // Get payment summary for the user
+  const { data: payments } = await supabase
+    .from("payment_summary")
+    .select("*")
+    .eq("arbiter_id", userId)
+    .order("created_at", { ascending: false })
+
+  return payments || []
+}
+
+export default async function PaymentsPage() {
+  const supabase = await createClient()
+  const {
+    data: { user },
+    error,
+  } = await supabase.auth.getUser()
+
+  if (error || !user) {
+    redirect("/auth/login")
+  }
+
+  const payments = await getPaymentData(user.id)
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -148,14 +93,26 @@ export default function PaymentsPage() {
   }
 
   const totalPaid = payments
-    .filter((p) => p.status === "paid")
-    .reduce((sum, p) => sum + Number.parseInt(p.amount.replace(/[₦,]/g, "")), 0)
+    .filter((p) => p.payment_status === "paid")
+    .reduce((sum, p) => sum + Number(p.amount || 0), 0)
   const totalPending = payments
-    .filter((p) => p.status === "pending" || p.status === "processing")
-    .reduce((sum, p) => sum + Number.parseInt(p.amount.replace(/[₦,]/g, "")), 0)
+    .filter((p) => p.payment_status === "pending" || p.payment_status === "processing")
+    .reduce((sum, p) => sum + Number(p.amount || 0), 0)
   const totalOverdue = payments
-    .filter((p) => p.status === "overdue")
-    .reduce((sum, p) => sum + Number.parseInt(p.amount.replace(/[₦,]/g, "")), 0)
+    .filter((p) => p.payment_status === "overdue")
+    .reduce((sum, p) => sum + Number(p.amount || 0), 0)
+
+  const formatCurrency = (amount: number, currency = "NGN") => {
+    if (currency === "NGN") {
+      return `₦${amount.toLocaleString()}`
+    }
+    return `${currency} ${amount.toLocaleString()}`
+  }
+
+  const formatDate = (dateString: string) => {
+    if (!dateString) return "N/A"
+    return new Date(dateString).toLocaleDateString()
+  }
 
   return (
     <div className="space-y-6">
@@ -179,7 +136,7 @@ export default function PaymentsPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-muted-foreground">Total Paid</p>
-                <p className="text-2xl font-bold">₦{totalPaid.toLocaleString()}</p>
+                <p className="text-2xl font-bold">{formatCurrency(totalPaid)}</p>
               </div>
               <CheckCircle className="h-8 w-8 text-green-500" />
             </div>
@@ -191,7 +148,7 @@ export default function PaymentsPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-muted-foreground">Pending</p>
-                <p className="text-2xl font-bold">₦{totalPending.toLocaleString()}</p>
+                <p className="text-2xl font-bold">{formatCurrency(totalPending)}</p>
               </div>
               <Clock className="h-8 w-8 text-yellow-500" />
             </div>
@@ -203,7 +160,7 @@ export default function PaymentsPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-muted-foreground">Overdue</p>
-                <p className="text-2xl font-bold">₦{totalOverdue.toLocaleString()}</p>
+                <p className="text-2xl font-bold">{formatCurrency(totalOverdue)}</p>
               </div>
               <XCircle className="h-8 w-8 text-red-500" />
             </div>
@@ -215,7 +172,7 @@ export default function PaymentsPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-muted-foreground">This Year</p>
-                <p className="text-2xl font-bold">₦{(totalPaid + totalPending + totalOverdue).toLocaleString()}</p>
+                <p className="text-2xl font-bold">{formatCurrency(totalPaid + totalPending + totalOverdue)}</p>
               </div>
               <DollarSign className="h-8 w-8 text-muted-foreground" />
             </div>
@@ -280,56 +237,66 @@ export default function PaymentsPage() {
               <CardDescription>Complete record of your payments and transactions</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {payments.map((payment) => (
-                <div key={payment.id} className="border rounded-lg p-4 space-y-3">
-                  <div className="flex items-start justify-between">
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <h3 className="font-semibold">{payment.tournament}</h3>
-                        <Badge className={getStatusColor(payment.status)}>
-                          {getStatusIcon(payment.status)}
-                          <span className="ml-1 capitalize">{payment.status}</span>
-                        </Badge>
-                        <Badge className={getTypeColor(payment.type)}>{payment.type.replace("_", " ")}</Badge>
+              {payments.length > 0 ? (
+                payments.map((payment) => (
+                  <div key={payment.id} className="border rounded-lg p-4 space-y-3">
+                    <div className="flex items-start justify-between">
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <h3 className="font-semibold">{payment.tournament_name || payment.description}</h3>
+                          <Badge className={getStatusColor(payment.payment_status)}>
+                            {getStatusIcon(payment.payment_status)}
+                            <span className="ml-1 capitalize">{payment.payment_status}</span>
+                          </Badge>
+                          <Badge className={getTypeColor(payment.payment_type)}>
+                            {payment.payment_type?.replace("_", " ") || "Payment"}
+                          </Badge>
+                        </div>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm text-muted-foreground">
+                          <div className="flex items-center gap-1">
+                            <DollarSign className="w-4 h-4" />
+                            <span className="font-medium text-foreground">
+                              {formatCurrency(Number(payment.amount), payment.currency)}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <Calendar className="w-4 h-4" />
+                            <span>Due: {formatDate(payment.due_date)}</span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <CreditCard className="w-4 h-4" />
+                            <span>{payment.payment_method || "Pending"}</span>
+                          </div>
+                          <div>
+                            <span>Ref: {payment.transaction_reference || "N/A"}</span>
+                          </div>
+                        </div>
                       </div>
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm text-muted-foreground">
-                        <div className="flex items-center gap-1">
-                          <DollarSign className="w-4 h-4" />
-                          <span className="font-medium text-foreground">{payment.amount}</span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <Calendar className="w-4 h-4" />
-                          <span>Due: {payment.dueDate}</span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <CreditCard className="w-4 h-4" />
-                          <span>{payment.method}</span>
-                        </div>
-                        <div>
-                          <span>Ref: {payment.reference}</span>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="flex gap-2">
-                      {payment.status === "pending" && <Button size="sm">Pay Now</Button>}
-                      {payment.status === "paid" && (
+                      <div className="flex gap-2">
+                        {payment.payment_status === "pending" && <Button size="sm">Pay Now</Button>}
+                        {payment.payment_status === "paid" && payment.receipt_url && (
+                          <Button variant="outline" size="sm" asChild>
+                            <a href={payment.receipt_url} target="_blank" rel="noopener noreferrer">
+                              <Download className="w-4 h-4 mr-2" />
+                              Receipt
+                            </a>
+                          </Button>
+                        )}
+                        {payment.payment_status === "overdue" && (
+                          <Button size="sm" variant="destructive">
+                            Pay Overdue
+                          </Button>
+                        )}
                         <Button variant="outline" size="sm">
-                          <Download className="w-4 h-4 mr-2" />
-                          Receipt
+                          Details
                         </Button>
-                      )}
-                      {payment.status === "overdue" && (
-                        <Button size="sm" variant="destructive">
-                          Pay Overdue
-                        </Button>
-                      )}
-                      <Button variant="outline" size="sm">
-                        Details
-                      </Button>
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                ))
+              ) : (
+                <p className="text-muted-foreground text-center py-8">No payment records found</p>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -341,52 +308,66 @@ export default function PaymentsPage() {
               <CardDescription>Payments that require your attention</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {payments
-                .filter((p) => p.status === "pending" || p.status === "processing" || p.status === "overdue")
-                .map((payment) => (
-                  <div key={payment.id} className="border rounded-lg p-4 space-y-3">
-                    <div className="flex items-start justify-between">
-                      <div className="space-y-2">
-                        <div className="flex items-center gap-2">
-                          <h3 className="font-semibold">{payment.tournament}</h3>
-                          <Badge className={getStatusColor(payment.status)}>
-                            {getStatusIcon(payment.status)}
-                            <span className="ml-1 capitalize">{payment.status}</span>
-                          </Badge>
+              {payments.filter(
+                (p) =>
+                  p.payment_status === "pending" || p.payment_status === "processing" || p.payment_status === "overdue",
+              ).length > 0 ? (
+                payments
+                  .filter(
+                    (p) =>
+                      p.payment_status === "pending" ||
+                      p.payment_status === "processing" ||
+                      p.payment_status === "overdue",
+                  )
+                  .map((payment) => (
+                    <div key={payment.id} className="border rounded-lg p-4 space-y-3">
+                      <div className="flex items-start justify-between">
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-2">
+                            <h3 className="font-semibold">{payment.tournament_name || payment.description}</h3>
+                            <Badge className={getStatusColor(payment.payment_status)}>
+                              {getStatusIcon(payment.payment_status)}
+                              <span className="ml-1 capitalize">{payment.payment_status}</span>
+                            </Badge>
+                          </div>
+                          <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm text-muted-foreground">
+                            <div className="flex items-center gap-1">
+                              <DollarSign className="w-4 h-4" />
+                              <span className="font-medium text-foreground">
+                                {formatCurrency(Number(payment.amount), payment.currency)}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <Calendar className="w-4 h-4" />
+                              <span>Due: {formatDate(payment.due_date)}</span>
+                            </div>
+                            <div>
+                              <span>Ref: {payment.transaction_reference || "N/A"}</span>
+                            </div>
+                          </div>
+                          {payment.payment_status === "overdue" && (
+                            <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+                              <p className="text-sm text-red-800">
+                                <XCircle className="w-4 h-4 inline mr-1" />
+                                Payment is overdue. Please pay immediately to avoid penalties.
+                              </p>
+                            </div>
+                          )}
                         </div>
-                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm text-muted-foreground">
-                          <div className="flex items-center gap-1">
-                            <DollarSign className="w-4 h-4" />
-                            <span className="font-medium text-foreground">{payment.amount}</span>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <Calendar className="w-4 h-4" />
-                            <span>Due: {payment.dueDate}</span>
-                          </div>
-                          <div>
-                            <span>Ref: {payment.reference}</span>
-                          </div>
+                        <div className="flex gap-2">
+                          <Button size="sm" variant={payment.payment_status === "overdue" ? "destructive" : "default"}>
+                            Pay Now
+                          </Button>
+                          <Button variant="outline" size="sm">
+                            Details
+                          </Button>
                         </div>
-                        {payment.status === "overdue" && (
-                          <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
-                            <p className="text-sm text-red-800">
-                              <XCircle className="w-4 h-4 inline mr-1" />
-                              Payment is overdue. Please pay immediately to avoid penalties.
-                            </p>
-                          </div>
-                        )}
-                      </div>
-                      <div className="flex gap-2">
-                        <Button size="sm" variant={payment.status === "overdue" ? "destructive" : "default"}>
-                          Pay Now
-                        </Button>
-                        <Button variant="outline" size="sm">
-                          Details
-                        </Button>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  ))
+              ) : (
+                <p className="text-muted-foreground text-center py-8">No pending payments</p>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -398,49 +379,59 @@ export default function PaymentsPage() {
               <CardDescription>Successfully completed payments</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {payments
-                .filter((p) => p.status === "paid")
-                .map((payment) => (
-                  <div key={payment.id} className="border rounded-lg p-4 space-y-3">
-                    <div className="flex items-start justify-between">
-                      <div className="space-y-2">
-                        <div className="flex items-center gap-2">
-                          <h3 className="font-semibold">{payment.tournament}</h3>
-                          <Badge className={getStatusColor(payment.status)}>
-                            {getStatusIcon(payment.status)}
-                            <span className="ml-1 capitalize">{payment.status}</span>
-                          </Badge>
+              {payments.filter((p) => p.payment_status === "paid").length > 0 ? (
+                payments
+                  .filter((p) => p.payment_status === "paid")
+                  .map((payment) => (
+                    <div key={payment.id} className="border rounded-lg p-4 space-y-3">
+                      <div className="flex items-start justify-between">
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-2">
+                            <h3 className="font-semibold">{payment.tournament_name || payment.description}</h3>
+                            <Badge className={getStatusColor(payment.payment_status)}>
+                              {getStatusIcon(payment.payment_status)}
+                              <span className="ml-1 capitalize">{payment.payment_status}</span>
+                            </Badge>
+                          </div>
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm text-muted-foreground">
+                            <div className="flex items-center gap-1">
+                              <DollarSign className="w-4 h-4" />
+                              <span className="font-medium text-foreground">
+                                {formatCurrency(Number(payment.amount), payment.currency)}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <Calendar className="w-4 h-4" />
+                              <span>Paid: {formatDate(payment.paid_date)}</span>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <CreditCard className="w-4 h-4" />
+                              <span>{payment.payment_method || "N/A"}</span>
+                            </div>
+                            <div>
+                              <span>Ref: {payment.transaction_reference || "N/A"}</span>
+                            </div>
+                          </div>
                         </div>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm text-muted-foreground">
-                          <div className="flex items-center gap-1">
-                            <DollarSign className="w-4 h-4" />
-                            <span className="font-medium text-foreground">{payment.amount}</span>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <Calendar className="w-4 h-4" />
-                            <span>Paid: {payment.date}</span>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <CreditCard className="w-4 h-4" />
-                            <span>{payment.method}</span>
-                          </div>
-                          <div>
-                            <span>Ref: {payment.reference}</span>
-                          </div>
+                        <div className="flex gap-2">
+                          {payment.receipt_url && (
+                            <Button variant="outline" size="sm" asChild>
+                              <a href={payment.receipt_url} target="_blank" rel="noopener noreferrer">
+                                <Download className="w-4 h-4 mr-2" />
+                                Receipt
+                              </a>
+                            </Button>
+                          )}
+                          <Button variant="outline" size="sm">
+                            Details
+                          </Button>
                         </div>
-                      </div>
-                      <div className="flex gap-2">
-                        <Button variant="outline" size="sm">
-                          <Download className="w-4 h-4 mr-2" />
-                          Receipt
-                        </Button>
-                        <Button variant="outline" size="sm">
-                          Details
-                        </Button>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  ))
+              ) : (
+                <p className="text-muted-foreground text-center py-8">No completed payments</p>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -453,26 +444,40 @@ export default function PaymentsPage() {
                 <CardDescription>Manage your preferred payment methods</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                {paymentMethods.map((method) => (
-                  <div key={method.id} className="flex items-center justify-between p-3 border rounded-lg">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 bg-primary/10 rounded-lg flex items-center justify-center">
-                        <CreditCard className="w-5 h-5 text-primary" />
-                      </div>
-                      <div>
-                        <p className="font-medium">{method.type}</p>
-                        <p className="text-sm text-muted-foreground">{method.details}</p>
-                      </div>
+                <div className="flex items-center justify-between p-3 border rounded-lg">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-primary/10 rounded-lg flex items-center justify-center">
+                      <CreditCard className="w-5 h-5 text-primary" />
                     </div>
-                    <div className="flex items-center gap-2">
-                      {method.default && <Badge variant="default">Default</Badge>}
-                      <Badge variant={method.status === "active" ? "default" : "secondary"}>{method.status}</Badge>
-                      <Button variant="outline" size="sm">
-                        Edit
-                      </Button>
+                    <div>
+                      <p className="font-medium">Bank Transfer</p>
+                      <p className="text-sm text-muted-foreground">Primary payment method</p>
                     </div>
                   </div>
-                ))}
+                  <div className="flex items-center gap-2">
+                    <Badge variant="default">Default</Badge>
+                    <Badge variant="default">Active</Badge>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between p-3 border rounded-lg">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-green-500/10 rounded-lg flex items-center justify-center">
+                      <CreditCard className="w-5 h-5 text-green-600" />
+                    </div>
+                    <div>
+                      <p className="font-medium">Mobile Money</p>
+                      <p className="text-sm text-muted-foreground">MTN Mobile Money</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge variant="secondary">Available</Badge>
+                    <Button variant="outline" size="sm">
+                      Setup
+                    </Button>
+                  </div>
+                </div>
+
                 <Button variant="outline" className="w-full bg-transparent">
                   <CreditCard className="w-4 h-4 mr-2" />
                   Add Payment Method

@@ -3,84 +3,45 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Bell, Trophy, CreditCard, Users, Calendar, MessageSquare, Settings, CheckCheck, Trash2 } from "lucide-react"
+import { createClient } from "@/lib/supabase/server"
+import { redirect } from "next/navigation"
 
-export default function NotificationsPage() {
-  const notifications = [
-    {
-      id: 1,
-      type: "assignment",
-      icon: Trophy,
-      title: "New Tournament Assignment",
-      message: "You have been assigned as Chief Arbiter for the Lagos State Championship.",
-      time: "2 hours ago",
-      read: false,
-      priority: "high",
-    },
-    {
-      id: 2,
-      type: "payment",
-      icon: CreditCard,
-      title: "Payment Processed",
-      message: "Your arbitration fee for the National Youth Tournament has been processed.",
-      time: "1 day ago",
-      read: false,
-      priority: "medium",
-    },
-    {
-      id: 3,
-      type: "system",
-      icon: Settings,
-      title: "System Update",
-      message: "The NCAA dashboard has been updated with new features and improvements.",
-      time: "3 days ago",
-      read: true,
-      priority: "low",
-    },
-    {
-      id: 4,
-      type: "committee",
-      icon: Users,
-      title: "Committee Meeting",
-      message: "Monthly committee meeting scheduled for December 20th at 2:00 PM.",
-      time: "5 days ago",
-      read: true,
-      priority: "medium",
-    },
-    {
-      id: 5,
-      type: "calendar",
-      icon: Calendar,
-      title: "Event Reminder",
-      message: "Reminder: FIDE Arbiters Seminar starts tomorrow at 9:00 AM.",
-      time: "1 week ago",
-      read: true,
-      priority: "high",
-    },
-    {
-      id: 6,
-      type: "chat",
-      icon: MessageSquare,
-      title: "New Message",
-      message: "You have 3 new messages in the Zone 4.1 chat room.",
-      time: "1 week ago",
-      read: true,
-      priority: "low",
-    },
-  ]
+async function getNotifications(userId: string) {
+  const supabase = await createClient()
 
-  const unreadCount = notifications.filter((n) => !n.read).length
+  // Get all notifications for the user
+  const { data: notifications } = await supabase
+    .from("notifications")
+    .select("*")
+    .eq("recipient_id", userId)
+    .order("created_at", { ascending: false })
 
-  const getPriorityColor = (priority: string) => {
-    switch (priority) {
-      case "high":
-        return "bg-red-500"
-      case "medium":
-        return "bg-yellow-500"
-      case "low":
-        return "bg-blue-500"
-      default:
-        return "bg-gray-500"
-    }
+  return notifications || []
+}
+
+async function markAsRead(notificationId: string) {
+  const supabase = await createClient()
+
+  await supabase.from("notifications").update({ is_read: true }).eq("id", notificationId)
+}
+
+export default async function NotificationsPage() {
+  const supabase = await createClient()
+  const {
+    data: { user },
+    error,
+  } = await supabase.auth.getUser()
+
+  if (error || !user) {
+    redirect("/auth/login")
+  }
+
+  const notifications = await getNotifications(user.id)
+
+  const unreadCount = notifications.filter((n) => !n.is_read).length
+
+  const getPriorityColor = (isImportant: boolean) => {
+    return isImportant ? "bg-red-500" : "bg-blue-500"
   }
 
   const getTypeColor = (type: string) => {
@@ -100,6 +61,36 @@ export default function NotificationsPage() {
       default:
         return "bg-gray-500/10 text-gray-600"
     }
+  }
+
+  const getNotificationIcon = (type: string) => {
+    switch (type) {
+      case "assignment":
+        return Trophy
+      case "payment":
+        return CreditCard
+      case "system":
+        return Settings
+      case "committee":
+        return Users
+      case "calendar":
+        return Calendar
+      case "chat":
+        return MessageSquare
+      default:
+        return Bell
+    }
+  }
+
+  const formatTimeAgo = (dateString: string) => {
+    const date = new Date(dateString)
+    const now = new Date()
+    const diffInHours = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60))
+
+    if (diffInHours < 1) return "Just now"
+    if (diffInHours < 24) return `${diffInHours} hours ago`
+    if (diffInHours < 48) return "1 day ago"
+    return `${Math.floor(diffInHours / 24)} days ago`
   }
 
   return (
@@ -142,7 +133,7 @@ export default function NotificationsPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-muted-foreground">High Priority</p>
-                <p className="text-2xl font-bold">{notifications.filter((n) => n.priority === "high").length}</p>
+                <p className="text-2xl font-bold">{notifications.filter((n) => n.is_important).length}</p>
               </div>
               <Trophy className="h-8 w-8 text-muted-foreground" />
             </div>
@@ -155,7 +146,13 @@ export default function NotificationsPage() {
               <div>
                 <p className="text-sm font-medium text-muted-foreground">This Week</p>
                 <p className="text-2xl font-bold">
-                  {notifications.filter((n) => n.time.includes("day") || n.time.includes("hour")).length}
+                  {
+                    notifications.filter((n) => {
+                      const weekAgo = new Date()
+                      weekAgo.setDate(weekAgo.getDate() - 7)
+                      return new Date(n.created_at) > weekAgo
+                    }).length
+                  }
                 </p>
               </div>
               <Calendar className="h-8 w-8 text-muted-foreground" />
@@ -192,44 +189,48 @@ export default function NotificationsPage() {
               <CardDescription>Complete list of your notifications and updates</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {notifications.map((notification) => {
-                const IconComponent = notification.icon
-                return (
-                  <div
-                    key={notification.id}
-                    className={`flex items-start gap-4 p-4 border rounded-lg transition-colors hover:bg-muted/50 ${
-                      !notification.read ? "bg-primary/5 border-primary/20" : ""
-                    }`}
-                  >
+              {notifications.length > 0 ? (
+                notifications.map((notification) => {
+                  const IconComponent = getNotificationIcon(notification.notification_type)
+                  return (
                     <div
-                      className={`w-10 h-10 rounded-lg flex items-center justify-center ${getTypeColor(notification.type)}`}
+                      key={notification.id}
+                      className={`flex items-start gap-4 p-4 border rounded-lg transition-colors hover:bg-muted/50 ${
+                        !notification.is_read ? "bg-primary/5 border-primary/20" : ""
+                      }`}
                     >
-                      <IconComponent className="w-5 h-5" />
-                    </div>
-
-                    <div className="flex-1 space-y-1">
-                      <div className="flex items-center gap-2">
-                        <p className="font-medium">{notification.title}</p>
-                        {!notification.read && <div className="w-2 h-2 bg-primary rounded-full"></div>}
-                        <div className={`w-2 h-2 rounded-full ${getPriorityColor(notification.priority)}`}></div>
+                      <div
+                        className={`w-10 h-10 rounded-lg flex items-center justify-center ${getTypeColor(notification.notification_type)}`}
+                      >
+                        <IconComponent className="w-5 h-5" />
                       </div>
-                      <p className="text-sm text-muted-foreground">{notification.message}</p>
-                      <p className="text-xs text-muted-foreground">{notification.time}</p>
-                    </div>
 
-                    <div className="flex items-center gap-2">
-                      {!notification.read && (
+                      <div className="flex-1 space-y-1">
+                        <div className="flex items-center gap-2">
+                          <p className="font-medium">{notification.title}</p>
+                          {!notification.is_read && <div className="w-2 h-2 bg-primary rounded-full"></div>}
+                          <div className={`w-2 h-2 rounded-full ${getPriorityColor(notification.is_important)}`}></div>
+                        </div>
+                        <p className="text-sm text-muted-foreground">{notification.message}</p>
+                        <p className="text-xs text-muted-foreground">{formatTimeAgo(notification.created_at)}</p>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {!notification.is_read && (
+                          <Button variant="ghost" size="sm">
+                            <CheckCheck className="w-4 h-4" />
+                          </Button>
+                        )}
                         <Button variant="ghost" size="sm">
-                          <CheckCheck className="w-4 h-4" />
+                          <Trash2 className="w-4 h-4" />
                         </Button>
-                      )}
-                      <Button variant="ghost" size="sm">
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
+                      </div>
                     </div>
-                  </div>
-                )
-              })}
+                  )
+                })
+              ) : (
+                <p className="text-muted-foreground text-center py-8">No notifications found</p>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -241,39 +242,43 @@ export default function NotificationsPage() {
               <CardDescription>Notifications that require your attention</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {notifications
-                .filter((n) => !n.read)
-                .map((notification) => {
-                  const IconComponent = notification.icon
-                  return (
-                    <div
-                      key={notification.id}
-                      className="flex items-start gap-4 p-4 border rounded-lg bg-primary/5 border-primary/20"
-                    >
+              {notifications.filter((n) => !n.is_read).length > 0 ? (
+                notifications
+                  .filter((n) => !n.is_read)
+                  .map((notification) => {
+                    const IconComponent = getNotificationIcon(notification.notification_type)
+                    return (
                       <div
-                        className={`w-10 h-10 rounded-lg flex items-center justify-center ${getTypeColor(notification.type)}`}
+                        key={notification.id}
+                        className="flex items-start gap-4 p-4 border rounded-lg bg-primary/5 border-primary/20"
                       >
-                        <IconComponent className="w-5 h-5" />
-                      </div>
-
-                      <div className="flex-1 space-y-1">
-                        <div className="flex items-center gap-2">
-                          <p className="font-medium">{notification.title}</p>
-                          <div className="w-2 h-2 bg-primary rounded-full"></div>
-                          <Badge variant="secondary" className="text-xs">
-                            {notification.priority}
-                          </Badge>
+                        <div
+                          className={`w-10 h-10 rounded-lg flex items-center justify-center ${getTypeColor(notification.notification_type)}`}
+                        >
+                          <IconComponent className="w-5 h-5" />
                         </div>
-                        <p className="text-sm text-muted-foreground">{notification.message}</p>
-                        <p className="text-xs text-muted-foreground">{notification.time}</p>
-                      </div>
 
-                      <Button variant="outline" size="sm">
-                        Mark Read
-                      </Button>
-                    </div>
-                  )
-                })}
+                        <div className="flex-1 space-y-1">
+                          <div className="flex items-center gap-2">
+                            <p className="font-medium">{notification.title}</p>
+                            <div className="w-2 h-2 bg-primary rounded-full"></div>
+                            <Badge variant="secondary" className="text-xs">
+                              {notification.is_important ? "high" : "normal"}
+                            </Badge>
+                          </div>
+                          <p className="text-sm text-muted-foreground">{notification.message}</p>
+                          <p className="text-xs text-muted-foreground">{formatTimeAgo(notification.created_at)}</p>
+                        </div>
+
+                        <Button variant="outline" size="sm">
+                          Mark Read
+                        </Button>
+                      </div>
+                    )
+                  })
+              ) : (
+                <p className="text-muted-foreground text-center py-8">No unread notifications</p>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -285,35 +290,39 @@ export default function NotificationsPage() {
               <CardDescription>Tournament assignments and related updates</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {notifications
-                .filter((n) => n.type === "assignment")
-                .map((notification) => {
-                  const IconComponent = notification.icon
-                  return (
-                    <div
-                      key={notification.id}
-                      className={`flex items-start gap-4 p-4 border rounded-lg ${
-                        !notification.read ? "bg-primary/5 border-primary/20" : ""
-                      }`}
-                    >
+              {notifications.filter((n) => n.notification_type === "assignment").length > 0 ? (
+                notifications
+                  .filter((n) => n.notification_type === "assignment")
+                  .map((notification) => {
+                    const IconComponent = getNotificationIcon(notification.notification_type)
+                    return (
                       <div
-                        className={`w-10 h-10 rounded-lg flex items-center justify-center ${getTypeColor(notification.type)}`}
+                        key={notification.id}
+                        className={`flex items-start gap-4 p-4 border rounded-lg ${
+                          !notification.is_read ? "bg-primary/5 border-primary/20" : ""
+                        }`}
                       >
-                        <IconComponent className="w-5 h-5" />
-                      </div>
+                        <div
+                          className={`w-10 h-10 rounded-lg flex items-center justify-center ${getTypeColor(notification.notification_type)}`}
+                        >
+                          <IconComponent className="w-5 h-5" />
+                        </div>
 
-                      <div className="flex-1 space-y-1">
-                        <p className="font-medium">{notification.title}</p>
-                        <p className="text-sm text-muted-foreground">{notification.message}</p>
-                        <p className="text-xs text-muted-foreground">{notification.time}</p>
-                      </div>
+                        <div className="flex-1 space-y-1">
+                          <p className="font-medium">{notification.title}</p>
+                          <p className="text-sm text-muted-foreground">{notification.message}</p>
+                          <p className="text-xs text-muted-foreground">{formatTimeAgo(notification.created_at)}</p>
+                        </div>
 
-                      <Badge variant={notification.priority === "high" ? "destructive" : "secondary"}>
-                        {notification.priority}
-                      </Badge>
-                    </div>
-                  )
-                })}
+                        <Badge variant={notification.is_important ? "destructive" : "secondary"}>
+                          {notification.is_important ? "high" : "normal"}
+                        </Badge>
+                      </div>
+                    )
+                  })
+              ) : (
+                <p className="text-muted-foreground text-center py-8">No assignment notifications</p>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -325,31 +334,35 @@ export default function NotificationsPage() {
               <CardDescription>Payment processing and financial updates</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {notifications
-                .filter((n) => n.type === "payment")
-                .map((notification) => {
-                  const IconComponent = notification.icon
-                  return (
-                    <div
-                      key={notification.id}
-                      className={`flex items-start gap-4 p-4 border rounded-lg ${
-                        !notification.read ? "bg-primary/5 border-primary/20" : ""
-                      }`}
-                    >
+              {notifications.filter((n) => n.notification_type === "payment").length > 0 ? (
+                notifications
+                  .filter((n) => n.notification_type === "payment")
+                  .map((notification) => {
+                    const IconComponent = getNotificationIcon(notification.notification_type)
+                    return (
                       <div
-                        className={`w-10 h-10 rounded-lg flex items-center justify-center ${getTypeColor(notification.type)}`}
+                        key={notification.id}
+                        className={`flex items-start gap-4 p-4 border rounded-lg ${
+                          !notification.is_read ? "bg-primary/5 border-primary/20" : ""
+                        }`}
                       >
-                        <IconComponent className="w-5 h-5" />
-                      </div>
+                        <div
+                          className={`w-10 h-10 rounded-lg flex items-center justify-center ${getTypeColor(notification.notification_type)}`}
+                        >
+                          <IconComponent className="w-5 h-5" />
+                        </div>
 
-                      <div className="flex-1 space-y-1">
-                        <p className="font-medium">{notification.title}</p>
-                        <p className="text-sm text-muted-foreground">{notification.message}</p>
-                        <p className="text-xs text-muted-foreground">{notification.time}</p>
+                        <div className="flex-1 space-y-1">
+                          <p className="font-medium">{notification.title}</p>
+                          <p className="text-sm text-muted-foreground">{notification.message}</p>
+                          <p className="text-xs text-muted-foreground">{formatTimeAgo(notification.created_at)}</p>
+                        </div>
                       </div>
-                    </div>
-                  )
-                })}
+                    )
+                  })
+              ) : (
+                <p className="text-muted-foreground text-center py-8">No payment notifications</p>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -361,26 +374,30 @@ export default function NotificationsPage() {
               <CardDescription>System updates and maintenance announcements</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {notifications
-                .filter((n) => n.type === "system")
-                .map((notification) => {
-                  const IconComponent = notification.icon
-                  return (
-                    <div key={notification.id} className="flex items-start gap-4 p-4 border rounded-lg">
-                      <div
-                        className={`w-10 h-10 rounded-lg flex items-center justify-center ${getTypeColor(notification.type)}`}
-                      >
-                        <IconComponent className="w-5 h-5" />
-                      </div>
+              {notifications.filter((n) => n.notification_type === "system").length > 0 ? (
+                notifications
+                  .filter((n) => n.notification_type === "system")
+                  .map((notification) => {
+                    const IconComponent = getNotificationIcon(notification.notification_type)
+                    return (
+                      <div key={notification.id} className="flex items-start gap-4 p-4 border rounded-lg">
+                        <div
+                          className={`w-10 h-10 rounded-lg flex items-center justify-center ${getTypeColor(notification.notification_type)}`}
+                        >
+                          <IconComponent className="w-5 h-5" />
+                        </div>
 
-                      <div className="flex-1 space-y-1">
-                        <p className="font-medium">{notification.title}</p>
-                        <p className="text-sm text-muted-foreground">{notification.message}</p>
-                        <p className="text-xs text-muted-foreground">{notification.time}</p>
+                        <div className="flex-1 space-y-1">
+                          <p className="font-medium">{notification.title}</p>
+                          <p className="text-sm text-muted-foreground">{notification.message}</p>
+                          <p className="text-xs text-muted-foreground">{formatTimeAgo(notification.created_at)}</p>
+                        </div>
                       </div>
-                    </div>
-                  )
-                })}
+                    )
+                  })
+              ) : (
+                <p className="text-muted-foreground text-center py-8">No system notifications</p>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
