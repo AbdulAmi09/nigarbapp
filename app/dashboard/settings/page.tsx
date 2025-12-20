@@ -1,3 +1,7 @@
+"use client"
+
+import type React from "react"
+
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -7,34 +11,153 @@ import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Separator } from "@/components/ui/separator"
-import { Badge } from "@/components/ui/badge"
-import { Bell, Shield, User, Globe, Smartphone, Mail, Lock } from "lucide-react"
-import { createClient } from "@/lib/supabase/server"
-import { redirect } from "next/navigation"
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { Bell, Shield, User, Globe, Lock, Camera, Loader2, Check } from "lucide-react"
+import { createBrowserClient } from "@supabase/ssr"
+import { useRouter } from "next/navigation"
+import { useEffect, useState, useRef } from "react"
+import { useTheme } from "next-themes"
 
-async function getUserProfile(userId: string) {
-  const supabase = await createClient()
-
-  const { data: profile } = await supabase.from("profiles").select("*").eq("id", userId).single()
-
-  return profile
+interface Profile {
+  id: string
+  first_name: string | null
+  last_name: string | null
+  email: string | null
+  phone: string | null
+  bio: string | null
+  city: string | null
+  state: string | null
+  country: string | null
+  zone: string | null
+  arbiter_level: string | null
+  years_experience: number | null
+  license_number: string | null
+  avatar_url: string | null
 }
 
-export default async function SettingsPage() {
-  const supabase = await createClient()
-  const {
-    data: { user },
-    error,
-  } = await supabase.auth.getUser()
+export default function SettingsPage() {
+  const router = useRouter()
+  const { theme, setTheme } = useTheme()
+  const [profile, setProfile] = useState<Profile | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
-  if (error || !user) {
-    redirect("/auth/login")
+  // Notification preferences state
+  const [emailNotifications, setEmailNotifications] = useState(true)
+  const [pushNotifications, setPushNotifications] = useState(true)
+  const [tournamentAlerts, setTournamentAlerts] = useState(true)
+  const [paymentReminders, setPaymentReminders] = useState(true)
+
+  const supabase = createBrowserClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+  )
+
+  useEffect(() => {
+    async function fetchProfile() {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser()
+
+      if (!user) {
+        router.push("/auth/login")
+        return
+      }
+
+      const { data } = await supabase.from("profiles").select("*").eq("id", user.id).single()
+
+      if (data) {
+        setProfile({ ...data, email: user.email })
+      }
+      setLoading(false)
+    }
+
+    fetchProfile()
+  }, [router, supabase])
+
+  async function handleAvatarUpload(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    if (!file || !profile) return
+
+    setUploading(true)
+
+    try {
+      const fileExt = file.name.split(".").pop()
+      const fileName = `${profile.id}-${Date.now()}.${fileExt}`
+      const filePath = `avatars/${fileName}`
+
+      const { error: uploadError } = await supabase.storage.from("avatars").upload(filePath, file, { upsert: true })
+
+      if (uploadError) throw uploadError
+
+      const {
+        data: { publicUrl },
+      } = supabase.storage.from("avatars").getPublicUrl(filePath)
+
+      const { error: updateError } = await supabase
+        .from("profiles")
+        .update({ avatar_url: publicUrl })
+        .eq("id", profile.id)
+
+      if (updateError) throw updateError
+
+      setProfile({ ...profile, avatar_url: publicUrl })
+    } catch (error) {
+      console.error("Error uploading avatar:", error)
+    } finally {
+      setUploading(false)
+    }
   }
 
-  const profile = await getUserProfile(user.id)
+  async function handleSaveProfile() {
+    if (!profile) return
+
+    setSaving(true)
+    setSaved(false)
+
+    try {
+      const { error } = await supabase
+        .from("profiles")
+        .update({
+          first_name: profile.first_name,
+          last_name: profile.last_name,
+          phone: profile.phone,
+          bio: profile.bio,
+          city: profile.city,
+          state: profile.state,
+          country: profile.country,
+          zone: profile.zone,
+          arbiter_level: profile.arbiter_level,
+          years_experience: profile.years_experience,
+          license_number: profile.license_number,
+        })
+        .eq("id", profile.id)
+
+      if (error) throw error
+
+      setSaved(true)
+      setTimeout(() => setSaved(false), 3000)
+    } catch (error) {
+      console.error("Error saving profile:", error)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+      </div>
+    )
+  }
 
   if (!profile) {
-    redirect("/auth/login")
+    router.push("/auth/login")
+    return null
   }
 
   return (
@@ -57,6 +180,55 @@ export default async function SettingsPage() {
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
+                <Camera className="w-5 h-5" />
+                Profile Picture
+              </CardTitle>
+              <CardDescription>Update your profile picture to personalize your account.</CardDescription>
+            </CardHeader>
+            <CardContent className="flex items-center gap-6">
+              <div className="relative">
+                <Avatar className="w-24 h-24">
+                  <AvatarImage src={profile.avatar_url || ""} alt="Profile" />
+                  <AvatarFallback className="text-2xl">
+                    {profile.first_name?.[0]}
+                    {profile.last_name?.[0]}
+                  </AvatarFallback>
+                </Avatar>
+                {uploading && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/50 rounded-full">
+                    <Loader2 className="w-6 h-6 animate-spin text-white" />
+                  </div>
+                )}
+              </div>
+              <div className="space-y-2">
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleAvatarUpload}
+                  accept="image/*"
+                  className="hidden"
+                />
+                <Button onClick={() => fileInputRef.current?.click()} disabled={uploading}>
+                  {uploading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Uploading...
+                    </>
+                  ) : (
+                    <>
+                      <Camera className="w-4 h-4 mr-2" />
+                      Change Picture
+                    </>
+                  )}
+                </Button>
+                <p className="text-xs text-muted-foreground">JPG, PNG or GIF. Max 5MB.</p>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
                 <User className="w-5 h-5" />
                 Personal Information
               </CardTitle>
@@ -66,49 +238,78 @@ export default async function SettingsPage() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="firstName">First Name</Label>
-                  <Input id="firstName" defaultValue={profile.first_name || ""} />
+                  <Input
+                    id="firstName"
+                    value={profile.first_name || ""}
+                    onChange={(e) => setProfile({ ...profile, first_name: e.target.value })}
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="lastName">Last Name</Label>
-                  <Input id="lastName" defaultValue={profile.last_name || ""} />
+                  <Input
+                    id="lastName"
+                    value={profile.last_name || ""}
+                    onChange={(e) => setProfile({ ...profile, last_name: e.target.value })}
+                  />
                 </div>
               </div>
 
               <div className="space-y-2">
                 <Label htmlFor="email">Email Address</Label>
-                <Input id="email" type="email" defaultValue={user.email || ""} disabled />
+                <Input id="email" type="email" value={profile.email || ""} disabled />
                 <p className="text-xs text-muted-foreground">Email cannot be changed from this page</p>
               </div>
 
               <div className="space-y-2">
                 <Label htmlFor="phone">Phone Number</Label>
-                <Input id="phone" defaultValue={profile.phone || ""} />
+                <Input
+                  id="phone"
+                  value={profile.phone || ""}
+                  onChange={(e) => setProfile({ ...profile, phone: e.target.value })}
+                />
               </div>
 
               <div className="space-y-2">
                 <Label htmlFor="bio">Bio</Label>
-                <Textarea id="bio" placeholder="Tell us about yourself..." defaultValue={profile.bio || ""} />
+                <Textarea
+                  id="bio"
+                  placeholder="Tell us about yourself..."
+                  value={profile.bio || ""}
+                  onChange={(e) => setProfile({ ...profile, bio: e.target.value })}
+                />
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="city">City</Label>
-                  <Input id="city" defaultValue={profile.city || ""} />
+                  <Input
+                    id="city"
+                    value={profile.city || ""}
+                    onChange={(e) => setProfile({ ...profile, city: e.target.value })}
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="state">State</Label>
-                  <Input id="state" defaultValue={profile.state || ""} />
+                  <Input
+                    id="state"
+                    value={profile.state || ""}
+                    onChange={(e) => setProfile({ ...profile, state: e.target.value })}
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="country">Country</Label>
-                  <Input id="country" defaultValue={profile.country || "Nigeria"} />
+                  <Input
+                    id="country"
+                    value={profile.country || "Nigeria"}
+                    onChange={(e) => setProfile({ ...profile, country: e.target.value })}
+                  />
                 </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="zone">Zone</Label>
-                  <Select defaultValue={profile.zone || ""}>
+                  <Select value={profile.zone || ""} onValueChange={(value) => setProfile({ ...profile, zone: value })}>
                     <SelectTrigger>
                       <SelectValue placeholder="Select your zone" />
                     </SelectTrigger>
@@ -124,7 +325,10 @@ export default async function SettingsPage() {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="title">Arbiter Title</Label>
-                  <Select defaultValue={profile.arbiter_level || ""}>
+                  <Select
+                    value={profile.arbiter_level || ""}
+                    onValueChange={(value) => setProfile({ ...profile, arbiter_level: value })}
+                  >
                     <SelectTrigger>
                       <SelectValue placeholder="Select your title" />
                     </SelectTrigger>
@@ -141,26 +345,44 @@ export default async function SettingsPage() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="experience">Years of Experience</Label>
-                  <Input id="experience" type="number" defaultValue={profile.years_experience || ""} min="0" max="50" />
+                  <Input
+                    id="experience"
+                    type="number"
+                    value={profile.years_experience || ""}
+                    onChange={(e) =>
+                      setProfile({ ...profile, years_experience: Number.parseInt(e.target.value) || null })
+                    }
+                    min="0"
+                    max="50"
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="license">License Number</Label>
-                  <Input id="license" defaultValue={profile.license_number || ""} />
+                  <Input
+                    id="license"
+                    value={profile.license_number || ""}
+                    onChange={(e) => setProfile({ ...profile, license_number: e.target.value })}
+                  />
                 </div>
               </div>
 
-              <div className="flex items-center gap-4">
-                <div className="flex items-center space-x-2">
-                  <Switch id="active" defaultChecked={profile.is_active} />
-                  <Label htmlFor="active">Active Status</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Switch id="verified" defaultChecked={profile.is_verified} disabled />
-                  <Label htmlFor="verified">Verified Account</Label>
-                </div>
+              <div className="flex justify-end">
+                <Button onClick={handleSaveProfile} disabled={saving}>
+                  {saving ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Saving...
+                    </>
+                  ) : saved ? (
+                    <>
+                      <Check className="w-4 h-4 mr-2" />
+                      Saved!
+                    </>
+                  ) : (
+                    "Save Changes"
+                  )}
+                </Button>
               </div>
-
-              <Button>Save Changes</Button>
             </CardContent>
           </Card>
         </TabsContent>
@@ -172,96 +394,40 @@ export default async function SettingsPage() {
                 <Bell className="w-5 h-5" />
                 Notification Preferences
               </CardTitle>
-              <CardDescription>Choose how you want to be notified about important updates.</CardDescription>
+              <CardDescription>Manage how you receive notifications and alerts.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>Tournament Assignments</Label>
-                    <p className="text-sm text-muted-foreground">
-                      Get notified when you receive new tournament assignments
-                    </p>
-                  </div>
-                  <Switch defaultChecked />
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label>Email Notifications</Label>
+                  <p className="text-sm text-muted-foreground">Receive notifications via email</p>
                 </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>Payment Updates</Label>
-                    <p className="text-sm text-muted-foreground">
-                      Receive notifications about payment processing and updates
-                    </p>
-                  </div>
-                  <Switch defaultChecked />
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>System Announcements</Label>
-                    <p className="text-sm text-muted-foreground">
-                      Important updates about the NCAA system and policies
-                    </p>
-                  </div>
-                  <Switch defaultChecked />
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>Chat Messages</Label>
-                    <p className="text-sm text-muted-foreground">Notifications for new messages in chat rooms</p>
-                  </div>
-                  <Switch />
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>Committee Updates</Label>
-                    <p className="text-sm text-muted-foreground">Meeting schedules and committee announcements</p>
-                  </div>
-                  <Switch defaultChecked />
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>Event Reminders</Label>
-                    <p className="text-sm text-muted-foreground">Reminders for upcoming events and deadlines</p>
-                  </div>
-                  <Switch defaultChecked />
-                </div>
+                <Switch checked={emailNotifications} onCheckedChange={setEmailNotifications} />
               </div>
-
               <Separator />
-
-              <div className="space-y-4">
-                <h4 className="font-medium">Notification Methods</h4>
-
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Mail className="w-4 h-4" />
-                    <Label>Email Notifications</Label>
-                  </div>
-                  <Switch defaultChecked />
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label>Push Notifications</Label>
+                  <p className="text-sm text-muted-foreground">Receive push notifications in browser</p>
                 </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Smartphone className="w-4 h-4" />
-                    <Label>Push Notifications</Label>
-                  </div>
-                  <Switch defaultChecked />
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Bell className="w-4 h-4" />
-                    <Label>In-App Notifications</Label>
-                  </div>
-                  <Switch defaultChecked />
-                </div>
+                <Switch checked={pushNotifications} onCheckedChange={setPushNotifications} />
               </div>
-
-              <Button>Save Preferences</Button>
+              <Separator />
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label>Tournament Alerts</Label>
+                  <p className="text-sm text-muted-foreground">Get notified about new tournament assignments</p>
+                </div>
+                <Switch checked={tournamentAlerts} onCheckedChange={setTournamentAlerts} />
+              </div>
+              <Separator />
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label>Payment Reminders</Label>
+                  <p className="text-sm text-muted-foreground">Receive reminders for pending payments</p>
+                </div>
+                <Switch checked={paymentReminders} onCheckedChange={setPaymentReminders} />
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
@@ -270,103 +436,43 @@ export default async function SettingsPage() {
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <Shield className="w-5 h-5" />
-                Security Settings
+                <Lock className="w-5 h-5" />
+                Change Password
               </CardTitle>
-              <CardDescription>Manage your account security and authentication methods.</CardDescription>
+              <CardDescription>Update your password to keep your account secure.</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="currentPassword">Current Password</Label>
-                  <Input id="currentPassword" type="password" />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="newPassword">New Password</Label>
-                  <Input id="newPassword" type="password" />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="confirmPassword">Confirm New Password</Label>
-                  <Input id="confirmPassword" type="password" />
-                </div>
-                <Button>Update Password</Button>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="currentPassword">Current Password</Label>
+                <Input id="currentPassword" type="password" />
               </div>
-
-              <Separator />
-
-              <div className="space-y-4">
-                <h4 className="font-medium">Two-Factor Authentication</h4>
-                <div className="flex items-center justify-between p-4 border rounded-lg">
-                  <div>
-                    <p className="font-medium">SMS Authentication</p>
-                    <p className="text-sm text-muted-foreground">Receive verification codes via SMS</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Badge variant="outline">Not Enabled</Badge>
-                    <Button variant="outline" size="sm">
-                      Enable
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between p-4 border rounded-lg">
-                  <div>
-                    <p className="font-medium">Email Authentication</p>
-                    <p className="text-sm text-muted-foreground">Receive verification codes via email</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Badge variant="default">Enabled</Badge>
-                    <Button variant="outline" size="sm">
-                      Disable
-                    </Button>
-                  </div>
-                </div>
+              <div className="space-y-2">
+                <Label htmlFor="newPassword">New Password</Label>
+                <Input id="newPassword" type="password" />
               </div>
-
-              <Separator />
-
-              <div className="space-y-4">
-                <h4 className="font-medium">Active Sessions</h4>
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between p-3 border rounded-lg">
-                    <div>
-                      <p className="font-medium">Current Session</p>
-                      <p className="text-sm text-muted-foreground">Web Browser • Last active now</p>
-                    </div>
-                    <Badge variant="default">Active</Badge>
-                  </div>
-                  <div className="flex items-center justify-between p-3 border rounded-lg">
-                    <div>
-                      <p className="font-medium">Mobile Device</p>
-                      <p className="text-sm text-muted-foreground">Mobile App • Last active 2 hours ago</p>
-                    </div>
-                    <Button variant="outline" size="sm">
-                      Revoke
-                    </Button>
-                  </div>
-                </div>
+              <div className="space-y-2">
+                <Label htmlFor="confirmPassword">Confirm New Password</Label>
+                <Input id="confirmPassword" type="password" />
               </div>
+              <Button>Update Password</Button>
+            </CardContent>
+          </Card>
 
-              <Separator />
-
-              <div className="space-y-4">
-                <h4 className="font-medium">Account Security</h4>
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="font-medium">Login Alerts</p>
-                      <p className="text-sm text-muted-foreground">Get notified of new login attempts</p>
-                    </div>
-                    <Switch defaultChecked />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="font-medium">Suspicious Activity Monitoring</p>
-                      <p className="text-sm text-muted-foreground">Monitor for unusual account activity</p>
-                    </div>
-                    <Switch defaultChecked />
-                  </div>
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Shield className="w-5 h-5" />
+                Two-Factor Authentication
+              </CardTitle>
+              <CardDescription>Add an extra layer of security to your account.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label>Enable 2FA</Label>
+                  <p className="text-sm text-muted-foreground">Use authenticator app for login verification</p>
                 </div>
+                <Switch />
               </div>
             </CardContent>
           </Card>
@@ -377,111 +483,41 @@ export default async function SettingsPage() {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Globe className="w-5 h-5" />
-                Application Preferences
+                Appearance
               </CardTitle>
-              <CardDescription>Customize your dashboard experience and preferences.</CardDescription>
+              <CardDescription>Customize how the dashboard looks and feels.</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <Label>Language</Label>
-                  <Select defaultValue="en">
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="en">English</SelectItem>
-                      <SelectItem value="ha">Hausa</SelectItem>
-                      <SelectItem value="yo">Yoruba</SelectItem>
-                      <SelectItem value="ig">Igbo</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-2">
-                  <Label>Timezone</Label>
-                  <Select defaultValue="africa-lagos">
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="africa-lagos">Africa/Lagos (WAT)</SelectItem>
-                      <SelectItem value="utc">UTC</SelectItem>
-                      <SelectItem value="africa-cairo">Africa/Cairo (EET)</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-2">
-                  <Label>Date Format</Label>
-                  <Select defaultValue="dd-mm-yyyy">
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="dd-mm-yyyy">DD/MM/YYYY</SelectItem>
-                      <SelectItem value="mm-dd-yyyy">MM/DD/YYYY</SelectItem>
-                      <SelectItem value="yyyy-mm-dd">YYYY-MM-DD</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-2">
-                  <Label>Currency</Label>
-                  <Select defaultValue="ngn">
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="ngn">Nigerian Naira (₦)</SelectItem>
-                      <SelectItem value="usd">US Dollar ($)</SelectItem>
-                      <SelectItem value="eur">Euro (€)</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label>Theme</Label>
+                <Select value={theme} onValueChange={setTheme}>
+                  <SelectTrigger className="w-[200px]">
+                    <SelectValue placeholder="Select theme" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="light">Light</SelectItem>
+                    <SelectItem value="dark">Dark</SelectItem>
+                    <SelectItem value="system">System</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">Choose your preferred color theme</p>
               </div>
-
               <Separator />
-
-              <div className="space-y-4">
-                <h4 className="font-medium">Dashboard Preferences</h4>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>Dark Mode</Label>
-                    <p className="text-sm text-muted-foreground">Use dark theme for the dashboard</p>
-                  </div>
-                  <Switch />
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>Compact View</Label>
-                    <p className="text-sm text-muted-foreground">Show more information in less space</p>
-                  </div>
-                  <Switch />
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>Auto-refresh Data</Label>
-                    <p className="text-sm text-muted-foreground">
-                      Automatically refresh dashboard data every 5 minutes
-                    </p>
-                  </div>
-                  <Switch defaultChecked />
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>Show Tooltips</Label>
-                    <p className="text-sm text-muted-foreground">Display helpful tooltips throughout the app</p>
-                  </div>
-                  <Switch defaultChecked />
-                </div>
+              <div className="space-y-2">
+                <Label>Language</Label>
+                <Select defaultValue="en">
+                  <SelectTrigger className="w-[200px]">
+                    <SelectValue placeholder="Select language" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="en">English</SelectItem>
+                    <SelectItem value="fr">French</SelectItem>
+                    <SelectItem value="ha">Hausa</SelectItem>
+                    <SelectItem value="yo">Yoruba</SelectItem>
+                    <SelectItem value="ig">Igbo</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
-
-              <Button>Save Preferences</Button>
             </CardContent>
           </Card>
         </TabsContent>
@@ -490,109 +526,35 @@ export default async function SettingsPage() {
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <Lock className="w-5 h-5" />
+                <Shield className="w-5 h-5" />
                 Privacy Settings
               </CardTitle>
               <CardDescription>Control your privacy and data sharing preferences.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>Profile Visibility</Label>
-                    <p className="text-sm text-muted-foreground">Allow other arbiters to view your profile</p>
-                  </div>
-                  <Switch defaultChecked />
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label>Profile Visibility</Label>
+                  <p className="text-sm text-muted-foreground">Allow other arbiters to view your profile</p>
                 </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>Tournament History</Label>
-                    <p className="text-sm text-muted-foreground">Show your tournament history to other members</p>
-                  </div>
-                  <Switch defaultChecked />
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>Contact Information</Label>
-                    <p className="text-sm text-muted-foreground">Allow committee members to see your contact details</p>
-                  </div>
-                  <Switch defaultChecked />
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>Activity Status</Label>
-                    <p className="text-sm text-muted-foreground">Show when you're online or last active</p>
-                  </div>
-                  <Switch />
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>Performance Statistics</Label>
-                    <p className="text-sm text-muted-foreground">Share your performance metrics with other arbiters</p>
-                  </div>
-                  <Switch defaultChecked />
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>Location Information</Label>
-                    <p className="text-sm text-muted-foreground">Show your city and state in your profile</p>
-                  </div>
-                  <Switch defaultChecked />
-                </div>
+                <Switch defaultChecked />
               </div>
-
               <Separator />
-
-              <div className="space-y-4">
-                <h4 className="font-medium">Data Management</h4>
-
-                <div className="space-y-3">
-                  <Button variant="outline" className="w-full justify-start bg-transparent">
-                    Download My Data
-                  </Button>
-                  <p className="text-xs text-muted-foreground">
-                    Download a copy of all your personal data stored in our system
-                  </p>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label>Show Online Status</Label>
+                  <p className="text-sm text-muted-foreground">Let others see when you're online</p>
                 </div>
-
-                <div className="space-y-3">
-                  <Button variant="outline" className="w-full justify-start bg-transparent">
-                    Request Data Deletion
-                  </Button>
-                  <p className="text-xs text-muted-foreground">
-                    Request permanent deletion of your account and all associated data
-                  </p>
-                </div>
+                <Switch defaultChecked />
               </div>
-
               <Separator />
-
-              <div className="space-y-4">
-                <h4 className="font-medium">Communication Preferences</h4>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>Marketing Communications</Label>
-                    <p className="text-sm text-muted-foreground">Receive updates about new features and events</p>
-                  </div>
-                  <Switch />
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label>Share Performance Stats</Label>
+                  <p className="text-sm text-muted-foreground">Display your ratings and statistics publicly</p>
                 </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>Research Participation</Label>
-                    <p className="text-sm text-muted-foreground">Participate in surveys to improve our services</p>
-                  </div>
-                  <Switch />
-                </div>
+                <Switch />
               </div>
-
-              <Button>Save Privacy Settings</Button>
             </CardContent>
           </Card>
         </TabsContent>

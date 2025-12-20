@@ -1,20 +1,18 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Trophy, Users, Calendar, TrendingUp, Clock, MapPin, FileText } from "lucide-react"
+import { Trophy, Users, Calendar, TrendingUp, Clock, MapPin, FileText, CreditCard, MessageSquare } from "lucide-react"
 import { createClient } from "@/lib/supabase/server"
 import { redirect } from "next/navigation"
+import Link from "next/link"
 
 async function getDashboardData(userId: string) {
   const supabase = await createClient()
 
-  // Get user profile
   const { data: profile } = await supabase.from("profiles").select("*").eq("id", userId).single()
 
-  // Get dashboard statistics
   const { data: stats } = await supabase.rpc("get_arbiter_activity_summary", { arbiter_uuid: userId }).single()
 
-  // Get recent assignments
   const { data: assignments } = await supabase
     .from("assignment_details")
     .select("*")
@@ -22,7 +20,6 @@ async function getDashboardData(userId: string) {
     .order("created_at", { ascending: false })
     .limit(3)
 
-  // Get recent notifications
   const { data: notifications } = await supabase
     .from("notifications")
     .select("*")
@@ -31,6 +28,13 @@ async function getDashboardData(userId: string) {
     .limit(3)
 
   return { profile, stats, assignments, notifications }
+}
+
+function getGreeting() {
+  const hour = new Date().getHours()
+  if (hour < 12) return "Good morning"
+  if (hour < 17) return "Good afternoon"
+  return "Good evening"
 }
 
 export default async function DashboardPage() {
@@ -49,7 +53,9 @@ export default async function DashboardPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold text-balance">Welcome back, {profile?.first_name || "Arbiter"}</h1>
+        <h1 className="text-3xl font-bold text-balance">
+          {getGreeting()}, {profile?.first_name || "Arbiter"}!
+        </h1>
         <p className="text-muted-foreground text-pretty">
           Here's what's happening with your arbitration activities today.
         </p>
@@ -146,28 +152,47 @@ export default async function DashboardPage() {
           </CardContent>
         </Card>
 
-        {/* Quick Actions */}
         <Card>
           <CardHeader>
             <CardTitle>Quick Actions</CardTitle>
             <CardDescription>Frequently used features and shortcuts</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            <Button className="w-full justify-start bg-transparent" variant="outline">
-              <FileText className="mr-2 h-4 w-4" />
-              Submit Tournament Report
+            <Button className="w-full justify-start bg-transparent" variant="outline" asChild>
+              <Link href="/dashboard/tournament-evaluation">
+                <FileText className="mr-2 h-4 w-4" />
+                Submit Tournament Report
+              </Link>
             </Button>
-            <Button className="w-full justify-start bg-transparent" variant="outline">
-              <Calendar className="mr-2 h-4 w-4" />
-              View NCAA Calendar
+            <Button className="w-full justify-start bg-transparent" variant="outline" asChild>
+              <Link href="/dashboard/calendar">
+                <Calendar className="mr-2 h-4 w-4" />
+                View NCAA Calendar
+              </Link>
             </Button>
-            <Button className="w-full justify-start bg-transparent" variant="outline">
-              <Clock className="mr-2 h-4 w-4" />
-              Check Assignment Status
+            <Button className="w-full justify-start bg-transparent" variant="outline" asChild>
+              <Link href="/dashboard/tournament-assignment">
+                <Clock className="mr-2 h-4 w-4" />
+                Check Assignment Status
+              </Link>
             </Button>
-            <Button className="w-full justify-start bg-transparent" variant="outline">
-              <MapPin className="mr-2 h-4 w-4" />
-              Find Zone Information
+            <Button className="w-full justify-start bg-transparent" variant="outline" asChild>
+              <Link href="/dashboard/zones">
+                <MapPin className="mr-2 h-4 w-4" />
+                Find Zone Information
+              </Link>
+            </Button>
+            <Button className="w-full justify-start bg-transparent" variant="outline" asChild>
+              <Link href="/dashboard/payments">
+                <CreditCard className="mr-2 h-4 w-4" />
+                Make a Payment
+              </Link>
+            </Button>
+            <Button className="w-full justify-start bg-transparent" variant="outline" asChild>
+              <Link href="/dashboard/chat">
+                <MessageSquare className="mr-2 h-4 w-4" />
+                Open Chat Room
+              </Link>
             </Button>
           </CardContent>
         </Card>
@@ -175,9 +200,14 @@ export default async function DashboardPage() {
 
       {/* Notifications */}
       <Card>
-        <CardHeader>
-          <CardTitle>Recent Notifications</CardTitle>
-          <CardDescription>Stay updated with the latest announcements</CardDescription>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <div>
+            <CardTitle>Recent Notifications</CardTitle>
+            <CardDescription>Stay updated with the latest announcements</CardDescription>
+          </div>
+          <Button variant="outline" size="sm" asChild>
+            <Link href="/dashboard/notifications">View All</Link>
+          </Button>
         </CardHeader>
         <CardContent className="space-y-3">
           {notifications && notifications.length > 0 ? (

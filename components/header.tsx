@@ -1,7 +1,9 @@
+"use client"
+
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { Separator } from "@/components/ui/separator"
 import { Button } from "@/components/ui/button"
-import { Bell, Search, LogOut, User } from "lucide-react"
+import { Bell, Search, LogOut, User, Moon, Sun } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import {
   DropdownMenu,
@@ -12,40 +14,88 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { createClient } from "@/lib/supabase/server"
-import { redirect } from "next/navigation"
+import { createBrowserClient } from "@supabase/ssr"
+import { useRouter } from "next/navigation"
+import { useEffect, useState } from "react"
+import { useTheme } from "next-themes"
+import Link from "next/link"
 
-async function getHeaderData() {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
-  if (!user) return null
-
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("first_name, last_name, avatar_url")
-    .eq("id", user.id)
-    .single()
-
-  const { data: unreadCount } = await supabase.rpc("get_unread_notification_count", { user_uuid: user.id })
-
-  return { user, profile, unreadCount }
+interface Profile {
+  first_name: string | null
+  last_name: string | null
+  avatar_url: string | null
 }
 
-async function signOut() {
-  "use server"
-  const supabase = await createClient()
-  await supabase.auth.signOut()
-  redirect("/auth/login")
+interface HeaderData {
+  user: { email: string } | null
+  profile: Profile | null
+  unreadCount: number
 }
 
-export async function Header() {
-  const data = await getHeaderData()
+export function Header() {
+  const router = useRouter()
+  const { theme, setTheme } = useTheme()
+  const [mounted, setMounted] = useState(false)
+  const [data, setData] = useState<HeaderData>({
+    user: null,
+    profile: null,
+    unreadCount: 0,
+  })
 
-  if (!data) {
-    redirect("/auth/login")
+  const supabase = createBrowserClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+  )
+
+  useEffect(() => {
+    setMounted(true)
+
+    async function fetchHeaderData() {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser()
+
+      if (!user) {
+        router.push("/auth/login")
+        return
+      }
+
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("first_name, last_name, avatar_url")
+        .eq("id", user.id)
+        .single()
+
+      const { data: unreadCount } = await supabase.rpc("get_unread_notification_count", { user_uuid: user.id })
+
+      setData({
+        user: { email: user.email || "" },
+        profile,
+        unreadCount: unreadCount || 0,
+      })
+    }
+
+    fetchHeaderData()
+
+    const channel = supabase
+      .channel("notifications_header")
+      .on("postgres_changes", { event: "*", schema: "public", table: "notifications" }, () => {
+        fetchHeaderData()
+      })
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [router, supabase])
+
+  async function signOut() {
+    await supabase.auth.signOut()
+    router.push("/auth/login")
+  }
+
+  if (!mounted) {
+    return null
   }
 
   const { user, profile, unreadCount } = data
@@ -63,13 +113,21 @@ export async function Header() {
       </div>
 
       <div className="flex items-center gap-2">
-        <Button variant="ghost" size="icon" className="relative">
-          <Bell className="w-4 h-4" />
-          {unreadCount > 0 && (
-            <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
-              {unreadCount > 9 ? "9+" : unreadCount}
-            </span>
-          )}
+        <Button variant="ghost" size="icon" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
+          <Sun className="h-4 w-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
+          <Moon className="absolute h-4 w-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
+          <span className="sr-only">Toggle theme</span>
+        </Button>
+
+        <Button variant="ghost" size="icon" className="relative" asChild>
+          <Link href="/dashboard/notifications">
+            <Bell className="w-4 h-4" />
+            {unreadCount > 0 && (
+              <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                {unreadCount > 9 ? "9+" : unreadCount}
+              </span>
+            )}
+          </Link>
         </Button>
 
         <DropdownMenu>
@@ -90,22 +148,20 @@ export async function Header() {
                 <p className="text-sm font-medium leading-none">
                   {profile?.first_name} {profile?.last_name}
                 </p>
-                <p className="text-xs leading-none text-muted-foreground">{user.email}</p>
+                <p className="text-xs leading-none text-muted-foreground">{user?.email}</p>
               </div>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuItem>
-              <User className="mr-2 h-4 w-4" />
-              <span>Profile</span>
+            <DropdownMenuItem asChild>
+              <Link href="/dashboard/profile">
+                <User className="mr-2 h-4 w-4" />
+                <span>Profile</span>
+              </Link>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem asChild>
-              <form action={signOut}>
-                <button type="submit" className="flex w-full items-center">
-                  <LogOut className="mr-2 h-4 w-4" />
-                  <span>Log out</span>
-                </button>
-              </form>
+            <DropdownMenuItem onClick={signOut}>
+              <LogOut className="mr-2 h-4 w-4" />
+              <span>Log out</span>
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

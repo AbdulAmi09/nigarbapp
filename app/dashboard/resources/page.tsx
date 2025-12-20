@@ -1,134 +1,122 @@
+"use client"
+
+import { useEffect, useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { BookOpen, Download, Search, Filter, FileText, Video, Link, Star, Calendar, Eye } from "lucide-react"
+import { BookOpen, Download, Search, Filter, FileText, Video, Link, Star, Calendar, Eye, Loader2 } from "lucide-react"
+import { createBrowserClient } from "@supabase/ssr"
+
+const supabase = createBrowserClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!)
+
+interface Resource {
+  id: string
+  title: string
+  type: string
+  category: string
+  description: string
+  format: string
+  size: string
+  downloads: number
+  rating: number
+  date: string
+  featured: boolean
+  url: string
+}
 
 export default function ResourcesPage() {
-  const resources = [
-    {
-      id: 1,
-      title: "FIDE Laws of Chess 2023",
-      type: "document",
-      category: "rules",
-      description: "Official FIDE Laws of Chess with latest updates and amendments.",
-      format: "PDF",
-      size: "2.5 MB",
-      downloads: 1250,
-      rating: 4.9,
-      date: "Jan 2023",
-      featured: true,
-      url: "#",
-    },
-    {
-      id: 2,
-      title: "Arbiters Manual 2024",
-      type: "document",
-      category: "arbitration",
-      description: "Comprehensive guide for chess arbiters covering all aspects of tournament arbitration.",
-      format: "PDF",
-      size: "8.2 MB",
-      downloads: 890,
-      rating: 4.8,
-      date: "Mar 2024",
-      featured: true,
-      url: "#",
-    },
-    {
-      id: 3,
-      title: "Tournament Pairing Systems",
-      type: "video",
-      category: "training",
-      description: "Video tutorial explaining Swiss system and round-robin pairing methods.",
-      format: "MP4",
-      size: "125 MB",
-      downloads: 456,
-      rating: 4.7,
-      date: "Jun 2024",
-      featured: false,
-      url: "#",
-    },
-    {
-      id: 4,
-      title: "NCAA Constitution & Bylaws",
-      type: "document",
-      category: "governance",
-      description: "Official NCAA constitution and bylaws governing chess in Nigeria.",
-      format: "PDF",
-      size: "1.8 MB",
-      downloads: 678,
-      rating: 4.6,
-      date: "Feb 2024",
-      featured: false,
-      url: "#",
-    },
-    {
-      id: 5,
-      title: "Digital Chess Clock Usage",
-      type: "video",
-      category: "training",
-      description: "Complete guide to using digital chess clocks in tournaments.",
-      format: "MP4",
-      size: "89 MB",
-      downloads: 234,
-      rating: 4.5,
-      date: "Aug 2024",
-      featured: false,
-      url: "#",
-    },
-    {
-      id: 6,
-      title: "Anti-Cheating Guidelines",
-      type: "document",
-      category: "rules",
-      description: "Guidelines for preventing and handling cheating incidents in chess tournaments.",
-      format: "PDF",
-      size: "3.1 MB",
-      downloads: 567,
-      rating: 4.8,
-      date: "May 2024",
-      featured: false,
-      url: "#",
-    },
-    {
-      id: 7,
-      title: "FIDE Rating System Explained",
-      type: "link",
-      category: "education",
-      description: "External link to FIDE's comprehensive rating system documentation.",
-      format: "Web Link",
-      size: "N/A",
-      downloads: 345,
-      rating: 4.4,
-      date: "Jul 2024",
-      featured: false,
-      url: "https://fide.com",
-    },
-    {
-      id: 8,
-      title: "Tournament Report Templates",
-      type: "document",
-      category: "forms",
-      description: "Standard templates for tournament reports and evaluation forms.",
-      format: "DOCX",
-      size: "0.5 MB",
-      downloads: 789,
-      rating: 4.7,
-      date: "Apr 2024",
-      featured: false,
-      url: "#",
-    },
-  ]
+  const [resources, setResources] = useState<Resource[]>([])
+  const [loading, setLoading] = useState(true)
+  const [searchTerm, setSearchTerm] = useState("")
+  const [typeFilter, setTypeFilter] = useState("all")
+  const [categoryFilter, setCategoryFilter] = useState("all")
+
+  useEffect(() => {
+    fetchResources()
+  }, [])
+
+  const fetchResources = async () => {
+    try {
+      const { data, error } = await supabase
+        .from("resources")
+        .select("*")
+        .eq("is_public", true)
+        .order("created_at", { ascending: false })
+
+      if (error) throw error
+
+      const formattedResources: Resource[] = (data || []).map((resource: any) => ({
+        id: resource.id,
+        title: resource.title,
+        type: getResourceType(resource.file_type),
+        category: resource.category || "general",
+        description: resource.description || "",
+        format: resource.file_type?.toUpperCase() || "PDF",
+        size: formatFileSize(resource.file_size),
+        downloads: resource.download_count || 0,
+        rating: 4.5,
+        date: new Date(resource.created_at).toLocaleDateString("en-US", { month: "short", year: "numeric" }),
+        featured: resource.is_featured || false,
+        url: resource.file_url || "#",
+      }))
+
+      setResources(formattedResources)
+    } catch (error) {
+      console.error("Error fetching resources:", error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const getResourceType = (fileType: string) => {
+    if (!fileType) return "document"
+    const type = fileType.toLowerCase()
+    if (type.includes("video") || type === "mp4" || type === "mov") return "video"
+    if (type === "link" || type === "url") return "link"
+    return "document"
+  }
+
+  const formatFileSize = (bytes: number) => {
+    if (!bytes) return "N/A"
+    const sizes = ["Bytes", "KB", "MB", "GB"]
+    const i = Math.floor(Math.log(bytes) / Math.log(1024))
+    return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${sizes[i]}`
+  }
 
   const categories = [
-    { name: "Rules & Regulations", count: 2, color: "bg-primary/10 text-primary" },
-    { name: "Arbitration", count: 1, color: "bg-blue-500/10 text-blue-600" },
-    { name: "Training", count: 2, color: "bg-green-500/10 text-green-600" },
-    { name: "Governance", count: 1, color: "bg-purple-500/10 text-purple-600" },
-    { name: "Education", count: 1, color: "bg-orange-500/10 text-orange-600" },
-    { name: "Forms & Templates", count: 1, color: "bg-pink-500/10 text-pink-600" },
+    {
+      name: "Rules & Regulations",
+      count: resources.filter((r) => r.category === "Rules & Regulations").length,
+      color: "bg-primary/10 text-primary",
+    },
+    {
+      name: "Training Materials",
+      count: resources.filter((r) => r.category === "Training Materials").length,
+      color: "bg-blue-500/10 text-blue-600",
+    },
+    {
+      name: "Forms & Documents",
+      count: resources.filter((r) => r.category === "Forms & Documents").length,
+      color: "bg-green-500/10 text-green-600",
+    },
+    {
+      name: "Guidelines",
+      count: resources.filter((r) => r.category === "Guidelines").length,
+      color: "bg-purple-500/10 text-purple-600",
+    },
+    {
+      name: "Software",
+      count: resources.filter((r) => r.category === "Software").length,
+      color: "bg-orange-500/10 text-orange-600",
+    },
+    {
+      name: "Videos",
+      count: resources.filter((r) => r.category === "Videos").length,
+      color: "bg-pink-500/10 text-pink-600",
+    },
   ]
 
   const getTypeIcon = (type: string) => {
@@ -159,14 +147,45 @@ export default function ResourcesPage() {
 
   const getCategoryColor = (category: string) => {
     const categoryMap: { [key: string]: string } = {
-      rules: "bg-primary/10 text-primary",
-      arbitration: "bg-blue-500/10 text-blue-600",
-      training: "bg-green-500/10 text-green-600",
-      governance: "bg-purple-500/10 text-purple-600",
-      education: "bg-orange-500/10 text-orange-600",
-      forms: "bg-pink-500/10 text-pink-600",
+      "Rules & Regulations": "bg-primary/10 text-primary",
+      "Training Materials": "bg-blue-500/10 text-blue-600",
+      "Forms & Documents": "bg-green-500/10 text-green-600",
+      Guidelines: "bg-purple-500/10 text-purple-600",
+      Software: "bg-orange-500/10 text-orange-600",
+      Videos: "bg-pink-500/10 text-pink-600",
+      Articles: "bg-yellow-500/10 text-yellow-600",
     }
     return categoryMap[category] || "bg-gray-500/10 text-gray-600"
+  }
+
+  const filteredResources = resources.filter((resource) => {
+    const matchesSearch =
+      resource.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      resource.description.toLowerCase().includes(searchTerm.toLowerCase())
+    const matchesType = typeFilter === "all" || resource.type === typeFilter
+    const matchesCategory = categoryFilter === "all" || resource.category === categoryFilter
+    return matchesSearch && matchesType && matchesCategory
+  })
+
+  const handleDownload = async (resource: Resource) => {
+    // Increment download count
+    await supabase
+      .from("resources")
+      .update({ download_count: resource.downloads + 1 })
+      .eq("id", resource.id)
+
+    // Open download URL
+    if (resource.url && resource.url !== "#") {
+      window.open(resource.url, "_blank")
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+      </div>
+    )
   }
 
   return (
@@ -246,7 +265,11 @@ export default function ResourcesPage() {
         <CardContent>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
             {categories.map((category, index) => (
-              <div key={index} className={`p-3 rounded-lg cursor-pointer hover:opacity-80 ${category.color}`}>
+              <div
+                key={index}
+                className={`p-3 rounded-lg cursor-pointer hover:opacity-80 ${category.color}`}
+                onClick={() => setCategoryFilter(category.name)}
+              >
                 <p className="font-medium text-sm">{category.name}</p>
                 <p className="text-xs opacity-75">{category.count} resources</p>
               </div>
@@ -262,11 +285,16 @@ export default function ResourcesPage() {
             <div className="flex-1">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
-                <Input placeholder="Search resources..." className="pl-10" />
+                <Input
+                  placeholder="Search resources..."
+                  className="pl-10"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                />
               </div>
             </div>
             <div className="flex gap-2">
-              <Select>
+              <Select value={typeFilter} onValueChange={setTypeFilter}>
                 <SelectTrigger className="w-[140px]">
                   <SelectValue placeholder="Type" />
                 </SelectTrigger>
@@ -277,21 +305,29 @@ export default function ResourcesPage() {
                   <SelectItem value="link">Links</SelectItem>
                 </SelectContent>
               </Select>
-              <Select>
-                <SelectTrigger className="w-[140px]">
+              <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+                <SelectTrigger className="w-[160px]">
                   <SelectValue placeholder="Category" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Categories</SelectItem>
-                  <SelectItem value="rules">Rules</SelectItem>
-                  <SelectItem value="arbitration">Arbitration</SelectItem>
-                  <SelectItem value="training">Training</SelectItem>
-                  <SelectItem value="governance">Governance</SelectItem>
-                  <SelectItem value="education">Education</SelectItem>
-                  <SelectItem value="forms">Forms</SelectItem>
+                  <SelectItem value="Rules & Regulations">Rules & Regulations</SelectItem>
+                  <SelectItem value="Training Materials">Training Materials</SelectItem>
+                  <SelectItem value="Forms & Documents">Forms & Documents</SelectItem>
+                  <SelectItem value="Guidelines">Guidelines</SelectItem>
+                  <SelectItem value="Software">Software</SelectItem>
+                  <SelectItem value="Videos">Videos</SelectItem>
                 </SelectContent>
               </Select>
-              <Button variant="outline" size="icon">
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => {
+                  setTypeFilter("all")
+                  setCategoryFilter("all")
+                  setSearchTerm("")
+                }}
+              >
                 <Filter className="w-4 h-4" />
               </Button>
             </div>
@@ -309,82 +345,98 @@ export default function ResourcesPage() {
 
         <TabsContent value="all" className="space-y-4">
           <div className="grid gap-4 md:grid-cols-2">
-            {resources.map((resource) => (
-              <Card key={resource.id}>
+            {filteredResources.length === 0 ? (
+              <Card className="col-span-2">
                 <CardContent className="pt-6">
-                  <div className="space-y-4">
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-start gap-3">
-                        <div
-                          className={`w-12 h-12 rounded-lg flex items-center justify-center ${getTypeColor(resource.type)}`}
-                        >
-                          {getTypeIcon(resource.type)}
-                        </div>
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-1">
-                            <h3 className="font-semibold">{resource.title}</h3>
-                            {resource.featured && <Badge variant="default">Featured</Badge>}
-                          </div>
-                          <div className="flex items-center gap-2 mb-2">
-                            <Badge className={getTypeColor(resource.type)}>{resource.type}</Badge>
-                            <Badge variant="outline" className={getCategoryColor(resource.category)}>
-                              {resource.category}
-                            </Badge>
-                          </div>
-                          <p className="text-sm text-muted-foreground">{resource.description}</p>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm text-muted-foreground">
-                      <div>
-                        <span className="font-medium">Format:</span> {resource.format}
-                      </div>
-                      <div>
-                        <span className="font-medium">Size:</span> {resource.size}
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <Download className="w-3 h-3" />
-                        <span>{resource.downloads}</span>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
-                        <span>{resource.rating}</span>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center justify-between pt-2 border-t">
-                      <div className="flex items-center gap-1 text-sm text-muted-foreground">
-                        <Calendar className="w-3 h-3" />
-                        <span>Updated: {resource.date}</span>
-                      </div>
-                      <div className="flex gap-2">
-                        <Button variant="outline" size="sm">
-                          <Eye className="w-4 h-4 mr-2" />
-                          Preview
-                        </Button>
-                        <Button size="sm">
-                          <Download className="w-4 h-4 mr-2" />
-                          Download
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
+                  <p className="text-center text-muted-foreground py-8">No resources found</p>
                 </CardContent>
               </Card>
-            ))}
+            ) : (
+              filteredResources.map((resource) => (
+                <Card key={resource.id}>
+                  <CardContent className="pt-6">
+                    <div className="space-y-4">
+                      <div className="flex items-start justify-between">
+                        <div className="flex items-start gap-3">
+                          <div
+                            className={`w-12 h-12 rounded-lg flex items-center justify-center ${getTypeColor(resource.type)}`}
+                          >
+                            {getTypeIcon(resource.type)}
+                          </div>
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <h3 className="font-semibold">{resource.title}</h3>
+                              {resource.featured && <Badge variant="default">Featured</Badge>}
+                            </div>
+                            <div className="flex items-center gap-2 mb-2">
+                              <Badge className={getTypeColor(resource.type)}>{resource.type}</Badge>
+                              <Badge variant="outline" className={getCategoryColor(resource.category)}>
+                                {resource.category}
+                              </Badge>
+                            </div>
+                            <p className="text-sm text-muted-foreground">
+                              {resource.description || "No description available"}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm text-muted-foreground">
+                        <div>
+                          <span className="font-medium">Format:</span> {resource.format}
+                        </div>
+                        <div>
+                          <span className="font-medium">Size:</span> {resource.size}
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <Download className="w-3 h-3" />
+                          <span>{resource.downloads}</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
+                          <span>{resource.rating}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between pt-2 border-t">
+                        <div className="flex items-center gap-1 text-sm text-muted-foreground">
+                          <Calendar className="w-3 h-3" />
+                          <span>Updated: {resource.date}</span>
+                        </div>
+                        <div className="flex gap-2">
+                          <Button variant="outline" size="sm">
+                            <Eye className="w-4 h-4 mr-2" />
+                            Preview
+                          </Button>
+                          <Button size="sm" onClick={() => handleDownload(resource)}>
+                            <Download className="w-4 h-4 mr-2" />
+                            Download
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))
+            )}
           </div>
         </TabsContent>
 
         <TabsContent value="featured" className="space-y-4">
           <div className="grid gap-4 md:grid-cols-2">
-            {resources
-              .filter((r) => r.featured)
-              .map((resource) => (
-                <Card key={resource.id} className="border-primary/20">
-                  <CardContent className="pt-6">
-                    <div className="space-y-4">
-                      <div className="flex items-start justify-between">
+            {filteredResources.filter((r) => r.featured).length === 0 ? (
+              <Card className="col-span-2">
+                <CardContent className="pt-6">
+                  <p className="text-center text-muted-foreground py-8">No featured resources</p>
+                </CardContent>
+              </Card>
+            ) : (
+              filteredResources
+                .filter((r) => r.featured)
+                .map((resource) => (
+                  <Card key={resource.id} className="border-primary/20">
+                    <CardContent className="pt-6">
+                      <div className="space-y-4">
                         <div className="flex items-start gap-3">
                           <div
                             className={`w-12 h-12 rounded-lg flex items-center justify-center ${getTypeColor(resource.type)}`}
@@ -405,187 +457,118 @@ export default function ResourcesPage() {
                             <p className="text-sm text-muted-foreground">{resource.description}</p>
                           </div>
                         </div>
-                      </div>
 
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm text-muted-foreground">
-                        <div>
-                          <span className="font-medium">Format:</span> {resource.format}
-                        </div>
-                        <div>
-                          <span className="font-medium">Size:</span> {resource.size}
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <Download className="w-3 h-3" />
-                          <span>{resource.downloads}</span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
-                          <span>{resource.rating}</span>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center justify-between pt-2 border-t">
-                        <div className="flex items-center gap-1 text-sm text-muted-foreground">
-                          <Calendar className="w-3 h-3" />
-                          <span>Updated: {resource.date}</span>
-                        </div>
-                        <div className="flex gap-2">
-                          <Button variant="outline" size="sm">
-                            <Eye className="w-4 h-4 mr-2" />
-                            Preview
-                          </Button>
-                          <Button size="sm">
-                            <Download className="w-4 h-4 mr-2" />
-                            Download
-                          </Button>
+                        <div className="flex items-center justify-between pt-2 border-t">
+                          <div className="flex items-center gap-1 text-sm text-muted-foreground">
+                            <Calendar className="w-3 h-3" />
+                            <span>Updated: {resource.date}</span>
+                          </div>
+                          <div className="flex gap-2">
+                            <Button variant="outline" size="sm">
+                              <Eye className="w-4 h-4 mr-2" />
+                              Preview
+                            </Button>
+                            <Button size="sm" onClick={() => handleDownload(resource)}>
+                              <Download className="w-4 h-4 mr-2" />
+                              Download
+                            </Button>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+                    </CardContent>
+                  </Card>
+                ))
+            )}
           </div>
         </TabsContent>
 
         <TabsContent value="documents" className="space-y-4">
           <div className="grid gap-4 md:grid-cols-2">
-            {resources
-              .filter((r) => r.type === "document")
-              .map((resource) => (
-                <Card key={resource.id}>
-                  <CardContent className="pt-6">
-                    <div className="space-y-4">
-                      <div className="flex items-start justify-between">
+            {filteredResources.filter((r) => r.type === "document").length === 0 ? (
+              <Card className="col-span-2">
+                <CardContent className="pt-6">
+                  <p className="text-center text-muted-foreground py-8">No documents found</p>
+                </CardContent>
+              </Card>
+            ) : (
+              filteredResources
+                .filter((r) => r.type === "document")
+                .map((resource) => (
+                  <Card key={resource.id}>
+                    <CardContent className="pt-6">
+                      <div className="space-y-4">
                         <div className="flex items-start gap-3">
-                          <div
-                            className={`w-12 h-12 rounded-lg flex items-center justify-center ${getTypeColor(resource.type)}`}
-                          >
-                            {getTypeIcon(resource.type)}
+                          <div className="w-12 h-12 rounded-lg flex items-center justify-center bg-blue-500/10 text-blue-600">
+                            <FileText className="w-5 h-5" />
                           </div>
                           <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-1">
-                              <h3 className="font-semibold">{resource.title}</h3>
-                              {resource.featured && <Badge variant="default">Featured</Badge>}
-                            </div>
-                            <div className="flex items-center gap-2 mb-2">
-                              <Badge className={getTypeColor(resource.type)}>{resource.type}</Badge>
-                              <Badge variant="outline" className={getCategoryColor(resource.category)}>
-                                {resource.category}
-                              </Badge>
-                            </div>
-                            <p className="text-sm text-muted-foreground">{resource.description}</p>
+                            <h3 className="font-semibold mb-1">{resource.title}</h3>
+                            <Badge variant="outline" className={getCategoryColor(resource.category)}>
+                              {resource.category}
+                            </Badge>
+                            <p className="text-sm text-muted-foreground mt-2">{resource.description}</p>
                           </div>
                         </div>
-                      </div>
 
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm text-muted-foreground">
-                        <div>
-                          <span className="font-medium">Format:</span> {resource.format}
-                        </div>
-                        <div>
-                          <span className="font-medium">Size:</span> {resource.size}
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <Download className="w-3 h-3" />
-                          <span>{resource.downloads}</span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
-                          <span>{resource.rating}</span>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center justify-between pt-2 border-t">
-                        <div className="flex items-center gap-1 text-sm text-muted-foreground">
-                          <Calendar className="w-3 h-3" />
-                          <span>Updated: {resource.date}</span>
-                        </div>
-                        <div className="flex gap-2">
-                          <Button variant="outline" size="sm">
-                            <Eye className="w-4 h-4 mr-2" />
-                            Preview
-                          </Button>
-                          <Button size="sm">
+                        <div className="flex items-center justify-between pt-2 border-t">
+                          <div className="text-sm text-muted-foreground">
+                            {resource.format} - {resource.size}
+                          </div>
+                          <Button size="sm" onClick={() => handleDownload(resource)}>
                             <Download className="w-4 h-4 mr-2" />
                             Download
                           </Button>
                         </div>
                       </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+                    </CardContent>
+                  </Card>
+                ))
+            )}
           </div>
         </TabsContent>
 
         <TabsContent value="videos" className="space-y-4">
           <div className="grid gap-4 md:grid-cols-2">
-            {resources
-              .filter((r) => r.type === "video")
-              .map((resource) => (
-                <Card key={resource.id}>
-                  <CardContent className="pt-6">
-                    <div className="space-y-4">
-                      <div className="flex items-start justify-between">
+            {filteredResources.filter((r) => r.type === "video").length === 0 ? (
+              <Card className="col-span-2">
+                <CardContent className="pt-6">
+                  <p className="text-center text-muted-foreground py-8">No videos found</p>
+                </CardContent>
+              </Card>
+            ) : (
+              filteredResources
+                .filter((r) => r.type === "video")
+                .map((resource) => (
+                  <Card key={resource.id}>
+                    <CardContent className="pt-6">
+                      <div className="space-y-4">
                         <div className="flex items-start gap-3">
-                          <div
-                            className={`w-12 h-12 rounded-lg flex items-center justify-center ${getTypeColor(resource.type)}`}
-                          >
-                            {getTypeIcon(resource.type)}
+                          <div className="w-12 h-12 rounded-lg flex items-center justify-center bg-red-500/10 text-red-600">
+                            <Video className="w-5 h-5" />
                           </div>
                           <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-1">
-                              <h3 className="font-semibold">{resource.title}</h3>
-                              {resource.featured && <Badge variant="default">Featured</Badge>}
-                            </div>
-                            <div className="flex items-center gap-2 mb-2">
-                              <Badge className={getTypeColor(resource.type)}>{resource.type}</Badge>
-                              <Badge variant="outline" className={getCategoryColor(resource.category)}>
-                                {resource.category}
-                              </Badge>
-                            </div>
-                            <p className="text-sm text-muted-foreground">{resource.description}</p>
+                            <h3 className="font-semibold mb-1">{resource.title}</h3>
+                            <Badge variant="outline" className={getCategoryColor(resource.category)}>
+                              {resource.category}
+                            </Badge>
+                            <p className="text-sm text-muted-foreground mt-2">{resource.description}</p>
                           </div>
                         </div>
-                      </div>
 
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm text-muted-foreground">
-                        <div>
-                          <span className="font-medium">Format:</span> {resource.format}
-                        </div>
-                        <div>
-                          <span className="font-medium">Size:</span> {resource.size}
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <Download className="w-3 h-3" />
-                          <span>{resource.downloads}</span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
-                          <span>{resource.rating}</span>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center justify-between pt-2 border-t">
-                        <div className="flex items-center gap-1 text-sm text-muted-foreground">
-                          <Calendar className="w-3 h-3" />
-                          <span>Updated: {resource.date}</span>
-                        </div>
-                        <div className="flex gap-2">
-                          <Button variant="outline" size="sm">
+                        <div className="flex items-center justify-between pt-2 border-t">
+                          <div className="text-sm text-muted-foreground">
+                            {resource.format} - {resource.size}
+                          </div>
+                          <Button size="sm" onClick={() => handleDownload(resource)}>
                             <Eye className="w-4 h-4 mr-2" />
                             Watch
                           </Button>
-                          <Button size="sm">
-                            <Download className="w-4 h-4 mr-2" />
-                            Download
-                          </Button>
                         </div>
                       </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+                    </CardContent>
+                  </Card>
+                ))
+            )}
           </div>
         </TabsContent>
       </Tabs>
