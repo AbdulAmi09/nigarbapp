@@ -49,12 +49,18 @@ export default async function DashboardPage() {
   }
 
   const { profile, stats, assignments, notifications } = await getDashboardData(user.id)
+  
+  const displayName = profile?.first_name
+  ? `Arbiter ${profile.a_l ?? ""} ${profile.first_name} ${profile.last_name ?? ""}`.trim()
+  : "Arbiter"
+
+
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold text-balance">
-          {getGreeting()}, {profile?.first_name || "Arbiter"}!
+           {getGreeting()}, {displayName}!
         </h1>
         <p className="text-muted-foreground text-pretty">
           Here's what's happening with your arbitration activities today.
