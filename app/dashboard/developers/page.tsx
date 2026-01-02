@@ -1,4 +1,4 @@
-import { GitCommit, Code, Folder, Clock, Mail, Github, MessageSquare } from "lucide-react"
+import { GitCommit, Code, Folder, Clock, Mail, Github } from "lucide-react"
 import {
   Card,
   CardContent,
@@ -11,68 +11,45 @@ import {
   AvatarImage,
   AvatarFallback,
 } from "@/components/ui"
+import { createClient } from "@/lib/supabase/server"
+import { redirect } from "next/navigation"
 
-export default function DevelopersPage() {
-  const developers = [
-    {
-      id: 1,
-      name: "Adebayo Ogundimu",
-      role: "Lead Developer",
-      title: "Full Stack Engineer",
-      email: "adebayo.dev@ncaa.ng",
-      github: "adebayo-dev",
-      avatar: "/placeholder.svg?height=60&width=60",
-      bio: "Lead developer with 8+ years experience in web development and chess technology.",
-      skills: ["React", "Node.js", "TypeScript", "PostgreSQL", "AWS"],
-      contributions: 245,
-      joined: "Jan 2022",
-    },
-    {
-      id: 2,
-      name: "Fatima Hassan",
-      role: "Frontend Developer",
-      title: "UI/UX Engineer",
-      email: "fatima.dev@ncaa.ng",
-      github: "fatima-ui",
-      avatar: "/placeholder.svg?height=60&width=60",
-      bio: "Frontend specialist focused on creating intuitive user experiences for chess applications.",
-      skills: ["React", "TypeScript", "Tailwind CSS", "Figma", "Next.js"],
-      contributions: 189,
-      joined: "Mar 2022",
-    },
-    {
-      id: 3,
-      name: "Chukwuma Okoro",
-      role: "Backend Developer",
-      title: "API Engineer",
-      email: "chukwuma.dev@ncaa.ng",
-      github: "chukwuma-api",
-      avatar: "/placeholder.svg?height=60&width=60",
-      bio: "Backend specialist with expertise in scalable API development and database optimization.",
-      skills: ["Python", "Django", "PostgreSQL", "Redis", "Docker"],
-      contributions: 156,
-      joined: "Jun 2022",
-    },
-    {
-      id: 4,
-      name: "Aisha Abdullahi",
-      role: "Mobile Developer",
-      title: "React Native Engineer",
-      email: "aisha.dev@ncaa.ng",
-      github: "aisha-mobile",
-      avatar: "/placeholder.svg?height=60&width=60",
-      bio: "Mobile app developer creating cross-platform solutions for chess arbiters on the go.",
-      skills: ["React Native", "TypeScript", "Expo", "Firebase", "iOS/Android"],
-      contributions: 98,
-      joined: "Sep 2022",
-    },
-  ]
+async function getDevelopers(supabase: any) {
+  const { data: developers } = await supabase
+    .from("profiles")
+    .select("*")
+    .eq("is_active", true)
+    .order("tournaments_officiated", { ascending: false })
+    .limit(10)
+
+  return developers || []
+}
+
+export default async function DevelopersPage() {
+  const supabase = await createClient()
+  const {
+    data: { user },
+    error,
+  } = await supabase.auth.getUser()
+
+  if (error || !user) {
+    redirect("/auth/login")
+  }
+
+  const developers = await getDevelopers(supabase)
 
   const projectStats = {
     totalCommits: 1247,
     linesOfCode: 45678,
     activeProjects: 3,
     lastUpdate: "2 hours ago",
+  }
+
+  const skillMap: { [key: string]: string[] } = {
+    "International Arbiter": ["React", "Node.js", "TypeScript", "PostgreSQL", "AWS"],
+    "FIDE Master": ["React", "TypeScript", "Tailwind CSS", "Next.js"],
+    "National Arbiter": ["Python", "Django", "PostgreSQL", "Docker"],
+    "International Master": ["React Native", "TypeScript", "Firebase"],
   }
 
   return (
@@ -137,27 +114,27 @@ export default function DevelopersPage() {
             <CardContent className="p-6">
               <div className="flex items-start space-x-4">
                 <Avatar className="h-16 w-16">
-                  <AvatarImage src={developer.avatar || "/placeholder.svg"} alt={developer.name} />
+                  <AvatarImage src={developer.avatar_url || "/placeholder.svg"} alt={developer.first_name} />
                   <AvatarFallback>
-                    {developer.name
-                      .split(" ")
-                      .map((n) => n[0])
-                      .join("")}
+                    {developer.first_name?.[0]}
+                    {developer.last_name?.[0]}
                   </AvatarFallback>
                 </Avatar>
                 <div className="flex-1 space-y-2">
                   <div>
-                    <h3 className="font-semibold text-lg">{developer.name}</h3>
-                    <p className="text-sm text-muted-foreground">{developer.title}</p>
+                    <h3 className="font-semibold text-lg">
+                      {developer.first_name} {developer.last_name}
+                    </h3>
+                    <p className="text-sm text-muted-foreground">{developer.arbiter_level}</p>
                     <Badge variant="secondary" className="mt-1">
-                      {developer.role}
+                      Developer
                     </Badge>
                   </div>
-                  <p className="text-sm text-muted-foreground">{developer.bio}</p>
+                  <p className="text-sm text-muted-foreground">{developer.bio || "Chess arbiter and developer"}</p>
 
                   {/* Skills */}
                   <div className="flex flex-wrap gap-1">
-                    {developer.skills.map((skill) => (
+                    {(skillMap[developer.arbiter_level] || ["Chess", "Arbitration"]).map((skill) => (
                       <Badge key={skill} variant="outline" className="text-xs">
                         {skill}
                       </Badge>
@@ -168,27 +145,27 @@ export default function DevelopersPage() {
                   <div className="flex items-center space-x-4 text-sm text-muted-foreground">
                     <div className="flex items-center space-x-1">
                       <GitCommit className="h-3 w-3" />
-                      <span>{developer.contributions} contributions</span>
+                      <span>{developer.tournaments_officiated} contributions</span>
                     </div>
                     <div className="flex items-center space-x-1">
                       <Clock className="h-3 w-3" />
-                      <span>Joined {developer.joined}</span>
+                      <span>Active</span>
                     </div>
                   </div>
 
                   {/* Contact */}
                   <div className="flex items-center space-x-2">
-                    <Button variant="outline" size="sm" asChild>
-                      <a href={`mailto:${developer.email}`}>
-                        <Mail className="h-3 w-3 mr-1" />
-                        Email
-                      </a>
-                    </Button>
-                    <Button variant="outline" size="sm" asChild>
-                      <a href={`https://github.com/${developer.github}`} target="_blank" rel="noopener noreferrer">
-                        <Github className="h-3 w-3 mr-1" />
-                        GitHub
-                      </a>
+                    {developer.email && (
+                      <Button variant="outline" size="sm" asChild>
+                        <a href={`mailto:${developer.email}`}>
+                          <Mail className="h-3 w-3 mr-1" />
+                          Email
+                        </a>
+                      </Button>
+                    )}
+                    <Button variant="outline" size="sm">
+                      <Github className="h-3 w-3 mr-1" />
+                      GitHub
                     </Button>
                   </div>
                 </div>
@@ -213,16 +190,13 @@ export default function DevelopersPage() {
                 <Badge variant="outline">React 18</Badge>
                 <Badge variant="outline">TypeScript</Badge>
                 <Badge variant="outline">Tailwind CSS</Badge>
-                <Badge variant="outline">shadcn/ui</Badge>
               </div>
             </div>
             <div>
               <h4 className="font-semibold mb-2">Backend</h4>
               <div className="space-y-1">
-                <Badge variant="outline">Node.js</Badge>
+                <Badge variant="outline">Supabase</Badge>
                 <Badge variant="outline">PostgreSQL</Badge>
-                <Badge variant="outline">Prisma ORM</Badge>
-                <Badge variant="outline">Redis</Badge>
                 <Badge variant="outline">WebSocket</Badge>
               </div>
             </div>
@@ -230,42 +204,10 @@ export default function DevelopersPage() {
               <h4 className="font-semibold mb-2">Infrastructure</h4>
               <div className="space-y-1">
                 <Badge variant="outline">Vercel</Badge>
-                <Badge variant="outline">AWS</Badge>
-                <Badge variant="outline">Docker</Badge>
-                <Badge variant="outline">GitHub Actions</Badge>
-                <Badge variant="outline">Cloudflare</Badge>
+                <Badge variant="outline">GitHub</Badge>
+                <Badge variant="outline">Paystack</Badge>
               </div>
             </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Contact Development Team */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Need Technical Support?</CardTitle>
-          <CardDescription>Get in touch with our development team for technical assistance</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex flex-col sm:flex-row gap-4">
-            <Button asChild>
-              <a href="mailto:dev-team@ncaa.ng">
-                <Mail className="h-4 w-4 mr-2" />
-                Email Development Team
-              </a>
-            </Button>
-            <Button variant="outline" asChild>
-              <a href="https://github.com/ncaa-ng/dashboard/issues" target="_blank" rel="noopener noreferrer">
-                <Github className="h-4 w-4 mr-2" />
-                Report Issue on GitHub
-              </a>
-            </Button>
-            <Button variant="outline" asChild>
-              <a href="/dashboard/chat">
-                <MessageSquare className="h-4 w-4 mr-2" />
-                Join Developer Chat
-              </a>
-            </Button>
           </div>
         </CardContent>
       </Card>

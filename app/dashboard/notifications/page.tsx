@@ -1,10 +1,10 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Bell, Trophy, CreditCard, Users, Calendar, MessageSquare, Settings, CheckCheck, Trash2 } from "lucide-react"
+import { Bell, Trophy, CreditCard, Users, Calendar, MessageSquare, Settings, CheckCheck } from "lucide-react"
 import { createClient } from "@/lib/supabase/server"
 import { redirect } from "next/navigation"
+import NotificationItem from "@/components/notification-item"
 
 async function getNotifications(userId: string) {
   const supabase = await createClient()
@@ -190,44 +190,19 @@ export default async function NotificationsPage() {
             </CardHeader>
             <CardContent className="space-y-4">
               {notifications.length > 0 ? (
-                notifications.map((notification) => {
-                  const IconComponent = getNotificationIcon(notification.notification_type)
-                  return (
-                    <div
-                      key={notification.id}
-                      className={`flex items-start gap-4 p-4 border rounded-lg transition-colors hover:bg-muted/50 ${
-                        !notification.is_read ? "bg-primary/5 border-primary/20" : ""
-                      }`}
-                    >
-                      <div
-                        className={`w-10 h-10 rounded-lg flex items-center justify-center ${getTypeColor(notification.notification_type)}`}
-                      >
-                        <IconComponent className="w-5 h-5" />
-                      </div>
-
-                      <div className="flex-1 space-y-1">
-                        <div className="flex items-center gap-2">
-                          <p className="font-medium">{notification.title}</p>
-                          {!notification.is_read && <div className="w-2 h-2 bg-primary rounded-full"></div>}
-                          <div className={`w-2 h-2 rounded-full ${getPriorityColor(notification.is_important)}`}></div>
-                        </div>
-                        <p className="text-sm text-muted-foreground">{notification.message}</p>
-                        <p className="text-xs text-muted-foreground">{formatTimeAgo(notification.created_at)}</p>
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        {!notification.is_read && (
-                          <Button variant="ghost" size="sm">
-                            <CheckCheck className="w-4 h-4" />
-                          </Button>
-                        )}
-                        <Button variant="ghost" size="sm">
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
-                      </div>
-                    </div>
-                  )
-                })
+                notifications.map((notification) => (
+                  <NotificationItem
+                    key={notification.id}
+                    notification={notification}
+                    getTypeColor={getTypeColor}
+                    getNotificationIcon={getNotificationIcon}
+                    formatTimeAgo={formatTimeAgo}
+                    onActionComplete={() => {
+                      // Refresh notifications
+                      location.reload()
+                    }}
+                  />
+                ))
               ) : (
                 <p className="text-muted-foreground text-center py-8">No notifications found</p>
               )}
@@ -245,37 +220,19 @@ export default async function NotificationsPage() {
               {notifications.filter((n) => !n.is_read).length > 0 ? (
                 notifications
                   .filter((n) => !n.is_read)
-                  .map((notification) => {
-                    const IconComponent = getNotificationIcon(notification.notification_type)
-                    return (
-                      <div
-                        key={notification.id}
-                        className="flex items-start gap-4 p-4 border rounded-lg bg-primary/5 border-primary/20"
-                      >
-                        <div
-                          className={`w-10 h-10 rounded-lg flex items-center justify-center ${getTypeColor(notification.notification_type)}`}
-                        >
-                          <IconComponent className="w-5 h-5" />
-                        </div>
-
-                        <div className="flex-1 space-y-1">
-                          <div className="flex items-center gap-2">
-                            <p className="font-medium">{notification.title}</p>
-                            <div className="w-2 h-2 bg-primary rounded-full"></div>
-                            <Badge variant="secondary" className="text-xs">
-                              {notification.is_important ? "high" : "normal"}
-                            </Badge>
-                          </div>
-                          <p className="text-sm text-muted-foreground">{notification.message}</p>
-                          <p className="text-xs text-muted-foreground">{formatTimeAgo(notification.created_at)}</p>
-                        </div>
-
-                        <Button variant="outline" size="sm">
-                          Mark Read
-                        </Button>
-                      </div>
-                    )
-                  })
+                  .map((notification) => (
+                    <NotificationItem
+                      key={notification.id}
+                      notification={notification}
+                      getTypeColor={getTypeColor}
+                      getNotificationIcon={getNotificationIcon}
+                      formatTimeAgo={formatTimeAgo}
+                      onActionComplete={() => {
+                        // Refresh notifications
+                        location.reload()
+                      }}
+                    />
+                  ))
               ) : (
                 <p className="text-muted-foreground text-center py-8">No unread notifications</p>
               )}
@@ -293,33 +250,19 @@ export default async function NotificationsPage() {
               {notifications.filter((n) => n.notification_type === "assignment").length > 0 ? (
                 notifications
                   .filter((n) => n.notification_type === "assignment")
-                  .map((notification) => {
-                    const IconComponent = getNotificationIcon(notification.notification_type)
-                    return (
-                      <div
-                        key={notification.id}
-                        className={`flex items-start gap-4 p-4 border rounded-lg ${
-                          !notification.is_read ? "bg-primary/5 border-primary/20" : ""
-                        }`}
-                      >
-                        <div
-                          className={`w-10 h-10 rounded-lg flex items-center justify-center ${getTypeColor(notification.notification_type)}`}
-                        >
-                          <IconComponent className="w-5 h-5" />
-                        </div>
-
-                        <div className="flex-1 space-y-1">
-                          <p className="font-medium">{notification.title}</p>
-                          <p className="text-sm text-muted-foreground">{notification.message}</p>
-                          <p className="text-xs text-muted-foreground">{formatTimeAgo(notification.created_at)}</p>
-                        </div>
-
-                        <Badge variant={notification.is_important ? "destructive" : "secondary"}>
-                          {notification.is_important ? "high" : "normal"}
-                        </Badge>
-                      </div>
-                    )
-                  })
+                  .map((notification) => (
+                    <NotificationItem
+                      key={notification.id}
+                      notification={notification}
+                      getTypeColor={getTypeColor}
+                      getNotificationIcon={getNotificationIcon}
+                      formatTimeAgo={formatTimeAgo}
+                      onActionComplete={() => {
+                        // Refresh notifications
+                        location.reload()
+                      }}
+                    />
+                  ))
               ) : (
                 <p className="text-muted-foreground text-center py-8">No assignment notifications</p>
               )}
@@ -337,29 +280,19 @@ export default async function NotificationsPage() {
               {notifications.filter((n) => n.notification_type === "payment").length > 0 ? (
                 notifications
                   .filter((n) => n.notification_type === "payment")
-                  .map((notification) => {
-                    const IconComponent = getNotificationIcon(notification.notification_type)
-                    return (
-                      <div
-                        key={notification.id}
-                        className={`flex items-start gap-4 p-4 border rounded-lg ${
-                          !notification.is_read ? "bg-primary/5 border-primary/20" : ""
-                        }`}
-                      >
-                        <div
-                          className={`w-10 h-10 rounded-lg flex items-center justify-center ${getTypeColor(notification.notification_type)}`}
-                        >
-                          <IconComponent className="w-5 h-5" />
-                        </div>
-
-                        <div className="flex-1 space-y-1">
-                          <p className="font-medium">{notification.title}</p>
-                          <p className="text-sm text-muted-foreground">{notification.message}</p>
-                          <p className="text-xs text-muted-foreground">{formatTimeAgo(notification.created_at)}</p>
-                        </div>
-                      </div>
-                    )
-                  })
+                  .map((notification) => (
+                    <NotificationItem
+                      key={notification.id}
+                      notification={notification}
+                      getTypeColor={getTypeColor}
+                      getNotificationIcon={getNotificationIcon}
+                      formatTimeAgo={formatTimeAgo}
+                      onActionComplete={() => {
+                        // Refresh notifications
+                        location.reload()
+                      }}
+                    />
+                  ))
               ) : (
                 <p className="text-muted-foreground text-center py-8">No payment notifications</p>
               )}
@@ -377,24 +310,19 @@ export default async function NotificationsPage() {
               {notifications.filter((n) => n.notification_type === "system").length > 0 ? (
                 notifications
                   .filter((n) => n.notification_type === "system")
-                  .map((notification) => {
-                    const IconComponent = getNotificationIcon(notification.notification_type)
-                    return (
-                      <div key={notification.id} className="flex items-start gap-4 p-4 border rounded-lg">
-                        <div
-                          className={`w-10 h-10 rounded-lg flex items-center justify-center ${getTypeColor(notification.notification_type)}`}
-                        >
-                          <IconComponent className="w-5 h-5" />
-                        </div>
-
-                        <div className="flex-1 space-y-1">
-                          <p className="font-medium">{notification.title}</p>
-                          <p className="text-sm text-muted-foreground">{notification.message}</p>
-                          <p className="text-xs text-muted-foreground">{formatTimeAgo(notification.created_at)}</p>
-                        </div>
-                      </div>
-                    )
-                  })
+                  .map((notification) => (
+                    <NotificationItem
+                      key={notification.id}
+                      notification={notification}
+                      getTypeColor={getTypeColor}
+                      getNotificationIcon={getNotificationIcon}
+                      formatTimeAgo={formatTimeAgo}
+                      onActionComplete={() => {
+                        // Refresh notifications
+                        location.reload()
+                      }}
+                    />
+                  ))
               ) : (
                 <p className="text-muted-foreground text-center py-8">No system notifications</p>
               )}

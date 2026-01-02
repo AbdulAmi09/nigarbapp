@@ -40,20 +40,24 @@ export async function POST(request: NextRequest) {
     }
 
     // Update payment with transaction reference
-    await supabase
+    const { error: updateError } = await supabase
       .from("payments")
       .update({
         transaction_reference: data.data.reference,
-        status: "processing",
+        payment_status: "processing",
       })
       .eq("id", payment_id)
+
+    if (updateError) {
+      console.error("[v0] Payment update error:", updateError)
+    }
 
     return NextResponse.json({
       authorization_url: data.data.authorization_url,
       reference: data.data.reference,
     })
   } catch (error) {
-    console.error("Payment initialization error:", error)
+    console.error("[v0] Payment initialization error:", error)
     return NextResponse.json({ error: "Failed to initialize payment" }, { status: 500 })
   }
 }

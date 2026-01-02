@@ -20,6 +20,7 @@ import {
 import { createBrowserClient } from "@supabase/ssr"
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
+import PaymentDialog from "@/components/payment-dialog"
 
 interface Payment {
   id: string
@@ -45,6 +46,7 @@ export default function PaymentsPage() {
   const [statusFilter, setStatusFilter] = useState("all")
   const [typeFilter, setTypeFilter] = useState("all")
   const [searchQuery, setSearchQuery] = useState("")
+  const [paymentDialogOpen, setPaymentDialogOpen] = useState(false)
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -221,6 +223,7 @@ export default function PaymentsPage() {
             Manage your tournament fees, membership payments, and financial transactions.
           </p>
         </div>
+        <Button onClick={() => setPaymentDialogOpen(true)}>Make Payment</Button>
       </div>
 
       {/* Summary Cards */}
@@ -395,6 +398,8 @@ export default function PaymentsPage() {
           )}
         </CardContent>
       </Card>
+
+      <PaymentDialog open={paymentDialogOpen} onOpenChange={setPaymentDialogOpen} userEmail={userEmail} />
     </div>
   )
 }
