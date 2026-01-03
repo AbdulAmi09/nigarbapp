@@ -5,21 +5,9 @@ import { Suspense } from "react"
 import "./globals.css"
 import { ThemeProvider } from "@/components/theme-provider"
 
-// Geist is not exported from `geist/font`. Load Geist as a local font instead.
-import localFont from "next/font/local"
+// Use Google Fonts only (v0 / Vercel compatible)
 import { Source_Serif_4 } from "next/font/google"
 import { Inter } from "next/font/google"
-
-// Initialize fonts
-const _geist = localFont({
-  src: "./fonts/Geist-Regular.woff2",
-  variable: '--v0-font-geist',
-})
-
-const _geistMono = localFont({
-  src: "./fonts/GeistMono-Regular.woff2",
-  variable: '--v0-font-geist-mono',
-})
 
 const _sourceSerif_4 = Source_Serif_4({
   subsets: ["latin"],
@@ -33,7 +21,7 @@ const inter = Inter({
   variable: "--font-inter"
 })
 
-const _v0_fontVariables = `${_geist.variable} ${_geistMono.variable} ${_sourceSerif_4.variable}`
+const _v0_fontVariables = `${inter.variable} ${_sourceSerif_4.variable}`
 
 export const metadata: Metadata = {
   title: "NCAA Dashboard - Nigeria Chess Arbiters Association",
