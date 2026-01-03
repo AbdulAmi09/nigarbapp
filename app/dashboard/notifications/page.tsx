@@ -4,12 +4,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Bell, Trophy, CreditCard, Users, Calendar, MessageSquare, Settings, CheckCheck } from "lucide-react"
 import { createClient } from "@/lib/supabase/server"
 import { redirect } from "next/navigation"
-import NotificationItem from "@/components/notification-item"
+import NotificationItemClient from "@/components/notification-item-client"
 
 async function getNotifications(userId: string) {
   const supabase = await createClient()
 
-  // Get all notifications for the user
   const { data: notifications } = await supabase
     .from("notifications")
     .select("*")
@@ -17,12 +16,6 @@ async function getNotifications(userId: string) {
     .order("created_at", { ascending: false })
 
   return notifications || []
-}
-
-async function markAsRead(notificationId: string) {
-  const supabase = await createClient()
-
-  await supabase.from("notifications").update({ is_read: true }).eq("id", notificationId)
 }
 
 export default async function NotificationsPage() {
@@ -39,10 +32,6 @@ export default async function NotificationsPage() {
   const notifications = await getNotifications(user.id)
 
   const unreadCount = notifications.filter((n) => !n.is_read).length
-
-  const getPriorityColor = (isImportant: boolean) => {
-    return isImportant ? "bg-red-500" : "bg-blue-500"
-  }
 
   const getTypeColor = (type: string) => {
     switch (type) {
@@ -191,16 +180,12 @@ export default async function NotificationsPage() {
             <CardContent className="space-y-4">
               {notifications.length > 0 ? (
                 notifications.map((notification) => (
-                  <NotificationItem
+                  <NotificationItemClient
                     key={notification.id}
                     notification={notification}
                     getTypeColor={getTypeColor}
                     getNotificationIcon={getNotificationIcon}
                     formatTimeAgo={formatTimeAgo}
-                    onActionComplete={() => {
-                      // Refresh notifications
-                      location.reload()
-                    }}
                   />
                 ))
               ) : (
@@ -221,16 +206,12 @@ export default async function NotificationsPage() {
                 notifications
                   .filter((n) => !n.is_read)
                   .map((notification) => (
-                    <NotificationItem
+                    <NotificationItemClient
                       key={notification.id}
                       notification={notification}
                       getTypeColor={getTypeColor}
                       getNotificationIcon={getNotificationIcon}
                       formatTimeAgo={formatTimeAgo}
-                      onActionComplete={() => {
-                        // Refresh notifications
-                        location.reload()
-                      }}
                     />
                   ))
               ) : (
@@ -251,16 +232,12 @@ export default async function NotificationsPage() {
                 notifications
                   .filter((n) => n.notification_type === "assignment")
                   .map((notification) => (
-                    <NotificationItem
+                    <NotificationItemClient
                       key={notification.id}
                       notification={notification}
                       getTypeColor={getTypeColor}
                       getNotificationIcon={getNotificationIcon}
                       formatTimeAgo={formatTimeAgo}
-                      onActionComplete={() => {
-                        // Refresh notifications
-                        location.reload()
-                      }}
                     />
                   ))
               ) : (
@@ -281,16 +258,12 @@ export default async function NotificationsPage() {
                 notifications
                   .filter((n) => n.notification_type === "payment")
                   .map((notification) => (
-                    <NotificationItem
+                    <NotificationItemClient
                       key={notification.id}
                       notification={notification}
                       getTypeColor={getTypeColor}
                       getNotificationIcon={getNotificationIcon}
                       formatTimeAgo={formatTimeAgo}
-                      onActionComplete={() => {
-                        // Refresh notifications
-                        location.reload()
-                      }}
                     />
                   ))
               ) : (
@@ -311,16 +284,12 @@ export default async function NotificationsPage() {
                 notifications
                   .filter((n) => n.notification_type === "system")
                   .map((notification) => (
-                    <NotificationItem
+                    <NotificationItemClient
                       key={notification.id}
                       notification={notification}
                       getTypeColor={getTypeColor}
                       getNotificationIcon={getNotificationIcon}
                       formatTimeAgo={formatTimeAgo}
-                      onActionComplete={() => {
-                        // Refresh notifications
-                        location.reload()
-                      }}
                     />
                   ))
               ) : (

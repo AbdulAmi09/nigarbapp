@@ -1,60 +1,165 @@
+"use client"
+
+import type React from "react"
+
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Progress } from "@/components/ui/progress"
-import { Trophy, MapPin, Calendar, Star, Clock } from "lucide-react"
-import { createClient } from "@/lib/supabase/server"
-import { redirect } from "next/navigation"
+import { Trophy, MapPin, Calendar, Star, Clock, Loader2 } from "lucide-react"
+import { createBrowserClient } from "@supabase/ssr"
+import { useRouter } from "next/navigation"
+import { useEffect, useState, useRef } from "react"
 
-async function getProfileData(userId: string) {
-  const supabase = await createClient()
-
-  // Get user profile
-  const { data: profile } = await supabase.from("profiles").select("*").eq("id", userId).single()
-
-  // Get performance metrics
-  const { data: stats } = await supabase.rpc("get_arbiter_activity_summary", { arbiter_uuid: userId }).single()
-
-  // Get tournament history
-  const { data: assignments } = await supabase
-    .from("assignment_details")
-    .select("*")
-    .eq("arbiter_id", userId)
-    .order("created_at", { ascending: false })
-    .limit(10)
-
-  // Get evaluations for ratings
-  const { data: tournamentEvaluations } = await supabase
-    .from("tournament_evaluations")
-    .select("overall_rating, submitted_at")
-    .eq("evaluator_id", userId)
-    .order("submitted_at", { ascending: false })
-
-  return { profile, stats, assignments, tournamentEvaluations }
+interface Profile {
+  id: string
+  first_name: string | null
+  last_name: string | null
+  avatar_url: string | null
+  arbiter_level: string | null
+  city: string | null
+  state: string | null
+  created_at: string
+  zone: string | null
+  license_number: string | null
+  license_expiry: string | null
+  is_active: boolean
+  years_experience: number | null
+  bio: string | null
+  phone: string | null
 }
 
-export default async function ProfilePage() {
-  const supabase = await createClient()
-  const {
-    data: { user },
-    error,
-  } = await supabase.auth.getUser()
+interface Stats {
+  total_assignments: number
+  completed_assignments: number
+}
 
-  if (error || !user) {
-    redirect("/auth/login")
+interface Assignment {
+  id: string
+  tournament_name: string
+  role: string
+  assignment_status: string
+  start_date: string
+  created_at: string
+}
+
+export default function ProfilePage() {
+  const router = useRouter()
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [profile, setProfile] = useState<Profile | null>(null)
+  const [stats, setStats] = useState<Stats | null>(null)
+  const [assignments, setAssignments] = useState<Assignment[]>([])
+  const [tournamentEvaluations, setTournamentEvaluations] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [uploading, setUploading] = useState(false)
+
+  const supabase = createBrowserClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+  )
+
+  useEffect(() => {
+    async function fetchProfileData() {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser()
+
+      if (!user) {
+        router.push("/auth/login")
+        return
+      }
+
+      // Get user profile
+      const { data: profileData } = await supabase.from("profiles").select("*").eq("id", user.id).single()
+
+      // Get performance metrics
+      const { data: statsData } = await supabase.rpc("get_arbiter_activity_summary", { arbiter_uuid: user.id }).single()
+
+      // Get tournament history
+      const { data: assignmentsData } = await supabase
+        .from("assignment_details")
+        .select("*")
+        .eq("arbiter_id", user.id)
+        .order("created_at", { ascending: false })
+        .limit(10)
+
+      // Get evaluations for ratings
+      const { data: evaluationsData } = await supabase
+        .from("tournament_evaluations")
+        .select("overall_rating, submitted_at")
+        .eq("evaluator_id", user.id)
+        .order("submitted_at", { ascending: false })
+
+      setProfile(profileData)
+      setStats(statsData)
+      setAssignments(assignmentsData || [])
+      setTournamentEvaluations(evaluationsData || [])
+      setLoading(false)
+    }
+
+    fetchProfileData()
+  }, [router, supabase])
+
+  async function handlePhotoUpload(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    if (!file || !profile) return
+
+    setUploading(true)
+
+    try {
+      if (profile.avatar_url) {
+        const oldPath = profile.avatar_url.split("/").pop()
+        if (oldPath) {
+          await supabase.storage.from("avatars").remove([oldPath])
+        }
+      }
+
+      const fileExt = file.name.split(".").pop()
+      const fileName = `${profile.id}-avatar.${fileExt}`
+      const filePath = `avatars/${fileName}`
+
+      const { error: uploadError } = await supabase.storage.from("avatars").upload(filePath, file, { upsert: true })
+
+      if (uploadError) throw uploadError
+
+      const {
+        data: { publicUrl },
+      } = supabase.storage.from("avatars").getPublicUrl(filePath)
+
+      const { error: updateError } = await supabase
+        .from("profiles")
+        .update({ avatar_url: publicUrl })
+        .eq("id", profile.id)
+
+      if (updateError) throw updateError
+
+      setProfile({ ...profile, avatar_url: publicUrl })
+    } catch (error) {
+      console.error("Error uploading photo:", error)
+    } finally {
+      setUploading(false)
+    }
   }
 
-  const { profile, stats, assignments, tournamentEvaluations } = await getProfileData(user.id)
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-8">
+        <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+      </div>
+    )
+  }
 
   if (!profile) {
-    redirect("/auth/login")
+    return <div className="text-center py-8">Profile not found</div>
   }
 
   // Calculate completion rate
   const completionRate =
-    stats?.total_assignments > 0 ? Math.round((stats.completed_assignments / stats.total_assignments) * 100) : 0
+    stats?.total_assignments && stats.total_assignments > 0
+      ? Math.round((stats.completed_assignments / stats.total_assignments) * 100)
+      : 0
 
   // Calculate average rating
   const avgRating =
@@ -85,9 +190,16 @@ export default async function ProfilePage() {
                   {profile.last_name?.[0]}
                 </AvatarFallback>
               </Avatar>
-              <Button variant="outline" className="mt-4 bg-transparent">
+              <Button
+                variant="outline"
+                className="mt-4 bg-transparent"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading}
+              >
+                {uploading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
                 Change Photo
               </Button>
+              <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} />
             </div>
 
             <div className="flex-1 space-y-4">

@@ -262,11 +262,8 @@ export default function SettingsPage() {
 
               <div className="space-y-2">
                 <Label htmlFor="phone">Phone Number</Label>
-                <Input
-                  id="phone"
-                  value={profile.phone || ""}
-                  onChange={(e) => setProfile({ ...profile, phone: e.target.value })}
-                />
+                <Input id="phone" value={profile.phone || ""} disabled className="bg-muted cursor-not-allowed" />
+                <p className="text-xs text-muted-foreground">This field is readonly and cannot be modified here</p>
               </div>
 
               <div className="space-y-2">
@@ -282,63 +279,41 @@ export default function SettingsPage() {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="city">City</Label>
-                  <Input
-                    id="city"
-                    value={profile.city || ""}
-                    onChange={(e) => setProfile({ ...profile, city: e.target.value })}
-                  />
+                  <Input id="city" value={profile.city || ""} disabled className="bg-muted cursor-not-allowed" />
+                  <p className="text-xs text-muted-foreground">Readonly</p>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="state">State</Label>
-                  <Input
-                    id="state"
-                    value={profile.state || ""}
-                    onChange={(e) => setProfile({ ...profile, state: e.target.value })}
-                  />
+                  <Input id="state" value={profile.state || ""} disabled className="bg-muted cursor-not-allowed" />
+                  <p className="text-xs text-muted-foreground">Readonly</p>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="country">Country</Label>
                   <Input
                     id="country"
                     value={profile.country || "Nigeria"}
-                    onChange={(e) => setProfile({ ...profile, country: e.target.value })}
+                    disabled
+                    className="bg-muted cursor-not-allowed"
                   />
+                  <p className="text-xs text-muted-foreground">Readonly</p>
                 </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="zone">Zone</Label>
-                  <Select value={profile.zone || ""} onValueChange={(value) => setProfile({ ...profile, zone: value })}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select your zone" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="zone_4_1">Zone 4.1 - Lagos</SelectItem>
-                      <SelectItem value="zone_4_2">Zone 4.2 - Abuja</SelectItem>
-                      <SelectItem value="zone_4_3">Zone 4.3 - Kano</SelectItem>
-                      <SelectItem value="zone_4_4">Zone 4.4 - Port Harcourt</SelectItem>
-                      <SelectItem value="zone_4_5">Zone 4.5 - Ibadan</SelectItem>
-                      <SelectItem value="zone_4_6">Zone 4.6 - Enugu</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <Input id="zone" value={profile.zone || ""} disabled className="bg-muted cursor-not-allowed" />
+                  <p className="text-xs text-muted-foreground">Readonly</p>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="title">Arbiter Title</Label>
-                  <Select
+                  <Input
+                    id="title"
                     value={profile.arbiter_level || ""}
-                    onValueChange={(value) => setProfile({ ...profile, arbiter_level: value })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select your title" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="candidate">Candidate Arbiter</SelectItem>
-                      <SelectItem value="national">National Arbiter</SelectItem>
-                      <SelectItem value="fide">FIDE Arbiter</SelectItem>
-                      <SelectItem value="international">International Arbiter</SelectItem>
-                    </SelectContent>
-                  </Select>
+                    disabled
+                    className="bg-muted cursor-not-allowed"
+                  />
+                  <p className="text-xs text-muted-foreground">Readonly</p>
                 </div>
               </div>
 
@@ -349,20 +324,20 @@ export default function SettingsPage() {
                     id="experience"
                     type="number"
                     value={profile.years_experience || ""}
-                    onChange={(e) =>
-                      setProfile({ ...profile, years_experience: Number.parseInt(e.target.value) || null })
-                    }
-                    min="0"
-                    max="50"
+                    disabled
+                    className="bg-muted cursor-not-allowed"
                   />
+                  <p className="text-xs text-muted-foreground">Readonly</p>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="license">License Number</Label>
                   <Input
                     id="license"
                     value={profile.license_number || ""}
-                    onChange={(e) => setProfile({ ...profile, license_number: e.target.value })}
+                    disabled
+                    className="bg-muted cursor-not-allowed"
                   />
+                  <p className="text-xs text-muted-foreground">Readonly</p>
                 </div>
               </div>
 
