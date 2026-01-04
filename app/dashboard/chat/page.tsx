@@ -7,7 +7,21 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { MessageSquare, Send, Users, Hash, Search, MoreVertical, Phone, Video, Loader2 } from "lucide-react"
+import {
+  MessageSquare,
+  Send,
+  Users,
+  Hash,
+  Search,
+  MoreVertical,
+  Phone,
+  Video,
+  Loader2,
+  FileUp,
+  Mic,
+  ChevronDown,
+  Download,
+} from "lucide-react"
 import { createBrowserClient } from "@supabase/ssr"
 import { useEffect, useState, useRef } from "react"
 import { useRouter } from "next/navigation"
@@ -15,9 +29,9 @@ import { useRouter } from "next/navigation"
 interface ChatRoom {
   id: string
   name: string
-  type: string
+  room_type: string
   description: string | null
-  member_count: number
+  member_count?: number
 }
 
 interface Message {
@@ -28,6 +42,10 @@ interface Message {
   sender_name: string
   sender_avatar: string | null
   sender_role: string | null
+  message_type: string
+  file_url?: string
+  file_name?: string
+  file_size?: number
 }
 
 interface OnlineMember {
@@ -41,15 +59,27 @@ interface OnlineMember {
 export default function ChatPage() {
   const router = useRouter()
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const audioInputRef = useRef<HTMLInputElement>(null)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const audioChunksRef = useRef<Blob[]>([])
+
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [chatRooms, setChatRooms] = useState<ChatRoom[]>([])
+  const [filteredRooms, setFilteredRooms] = useState<ChatRoom[]>([])
   const [activeRoom, setActiveRoom] = useState<ChatRoom | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
   const [newMessage, setNewMessage] = useState("")
   const [onlineMembers, setOnlineMembers] = useState<OnlineMember[]>([])
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({})
+  const [searchRooms, setSearchRooms] = useState("")
+  const [showNewMessagesButton, setShowNewMessagesButton] = useState(false)
+  const [newMessagesCount, setNewMessagesCount] = useState(0)
+  const [isRecording, setIsRecording] = useState(false)
+  const [uploadingFile, setUploadingFile] = useState(false)
+  const chatContainerRef = useRef<HTMLDivElement>(null)
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -70,13 +100,19 @@ export default function ChatPage() {
       setCurrentUserId(user.id)
 
       // Fetch chat rooms
-      const { data: rooms } = await supabase.from("chat_rooms").select("*").order("name")
+      const { data: rooms } = await supabase.from("chat_rooms").select("id, name, room_type, description").order("name")
 
       if (rooms && rooms.length > 0) {
-        setChatRooms(rooms)
-        setActiveRoom(rooms[0])
-        await fetchMessages(rooms[0].id)
-        await fetchOnlineMembers(rooms[0].id)
+        const roomsWithMembers = rooms.map((room) => ({
+          ...room,
+          member_count: 0,
+        }))
+        setChatRooms(roomsWithMembers)
+        setFilteredRooms(roomsWithMembers)
+        setActiveRoom(roomsWithMembers[0])
+        await fetchMessages(roomsWithMembers[0].id)
+        await fetchOnlineMembers(roomsWithMembers[0].id)
+        await markRoomAsRead(roomsWithMembers[0].id, user.id)
       }
 
       setLoading(false)
@@ -88,7 +124,6 @@ export default function ChatPage() {
   useEffect(() => {
     if (!activeRoom) return
 
-    // Subscribe to new messages in the active room
     const channel = supabase
       .channel(`room_${activeRoom.id}`)
       .on(
@@ -100,21 +135,26 @@ export default function ChatPage() {
           filter: `room_id=eq.${activeRoom.id}`,
         },
         async (payload) => {
-          // Fetch the full message with sender info
           const { data } = await supabase
             .from("chat_messages")
-            .select(`
+            .select(
+              `
               id,
               content,
               created_at,
               sender_id,
+              message_type,
+              file_url,
+              file_name,
+              file_size,
               profiles:sender_id (
                 first_name,
                 last_name,
                 avatar_url,
                 arbiter_level
               )
-            `)
+            `,
+            )
             .eq("id", payload.new.id)
             .single()
 
@@ -122,14 +162,20 @@ export default function ChatPage() {
             const profile = data.profiles as any
             const newMsg: Message = {
               id: data.id,
-              content: data.content,
+              content: data.content || "",
               created_at: data.created_at,
               sender_id: data.sender_id,
               sender_name: `${profile?.first_name || ""} ${profile?.last_name || ""}`.trim() || "Unknown",
               sender_avatar: profile?.avatar_url || null,
               sender_role: profile?.arbiter_level || null,
+              message_type: data.message_type || "text",
+              file_url: data.file_url,
+              file_name: data.file_name,
+              file_size: data.file_size,
             }
             setMessages((prev) => [...prev, newMsg])
+            setNewMessagesCount((prev) => prev + 1)
+            setShowNewMessagesButton(true)
           }
         },
       )
@@ -140,26 +186,40 @@ export default function ChatPage() {
     }
   }, [activeRoom, supabase])
 
-  useEffect(() => {
-    // Scroll to bottom when new messages arrive
+  const handleChatScroll = () => {
+    if (!chatContainerRef.current) return
+    const { scrollHeight, scrollTop, clientHeight } = chatContainerRef.current
+    const isAtBottom = scrollHeight - scrollTop - clientHeight < 50
+    setShowNewMessagesButton(!isAtBottom)
+  }
+
+  const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [messages])
+    setShowNewMessagesButton(false)
+    setNewMessagesCount(0)
+  }
 
   async function fetchMessages(roomId: string) {
     const { data } = await supabase
       .from("chat_messages")
-      .select(`
+      .select(
+        `
         id,
         content,
         created_at,
         sender_id,
+        message_type,
+        file_url,
+        file_name,
+        file_size,
         profiles:sender_id (
           first_name,
           last_name,
           avatar_url,
           arbiter_level
         )
-      `)
+      `,
+      )
       .eq("room_id", roomId)
       .order("created_at", { ascending: true })
       .limit(50)
@@ -167,22 +227,27 @@ export default function ChatPage() {
     if (data) {
       const formattedMessages: Message[] = data.map((msg: any) => ({
         id: msg.id,
-        content: msg.content,
+        content: msg.content || "",
         created_at: msg.created_at,
         sender_id: msg.sender_id,
         sender_name: `${msg.profiles?.first_name || ""} ${msg.profiles?.last_name || ""}`.trim() || "Unknown",
         sender_avatar: msg.profiles?.avatar_url || null,
         sender_role: msg.profiles?.arbiter_level || null,
+        message_type: msg.message_type || "text",
+        file_url: msg.file_url,
+        file_name: msg.file_name,
+        file_size: msg.file_size,
       }))
       setMessages(formattedMessages)
+      setTimeout(() => scrollToBottom(), 100)
     }
   }
 
   async function fetchOnlineMembers(roomId: string) {
-    // For now, fetch some recent active members
     const { data } = await supabase
-      .from("chat_room_members")
-      .select(`
+      .from("group_members")
+      .select(
+        `
         user_id,
         profiles:user_id (
           first_name,
@@ -190,8 +255,9 @@ export default function ChatPage() {
           avatar_url,
           arbiter_level
         )
-      `)
-      .eq("room_id", roomId)
+      `,
+      )
+      .eq("group_id", roomId)
       .limit(10)
 
     if (data) {
@@ -200,9 +266,106 @@ export default function ChatPage() {
         name: `${member.profiles?.first_name || ""} ${member.profiles?.last_name || ""}`.trim() || "Unknown",
         role: member.profiles?.arbiter_level || null,
         avatar_url: member.profiles?.avatar_url || null,
-        status: Math.random() > 0.5 ? "online" : "away", // Placeholder for actual presence
+        status: Math.random() > 0.5 ? "online" : "away",
       }))
       setOnlineMembers(members)
+    }
+  }
+
+  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    if (!activeRoom || !currentUserId) return
+
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    setUploadingFile(true)
+
+    try {
+      const fileName = `${currentUserId}/${activeRoom.id}/${Date.now()}-${file.name}`
+      const { data: uploadData, error: uploadError } = await supabase.storage.from("chat-files").upload(fileName, file)
+
+      if (uploadError) throw uploadError
+
+      const { data: urlData } = supabase.storage.from("chat-files").getPublicUrl(fileName)
+
+      const isImage = file.type.startsWith("image/")
+      const messageType = isImage ? "image" : "file"
+
+      await supabase.from("chat_messages").insert({
+        room_id: activeRoom.id,
+        sender_id: currentUserId,
+        content: isImage ? `[Image: ${file.name}]` : `[File: ${file.name}]`,
+        message_type: messageType,
+        file_url: urlData.publicUrl,
+        file_name: file.name,
+        file_size: file.size,
+      })
+
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ""
+      }
+    } catch (error) {
+      console.error("[v0] Error uploading file:", error)
+    } finally {
+      setUploadingFile(false)
+    }
+  }
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mediaRecorder = new MediaRecorder(stream)
+      mediaRecorderRef.current = mediaRecorder
+      audioChunksRef.current = []
+
+      mediaRecorder.ondataavailable = (event) => {
+        audioChunksRef.current.push(event.data)
+      }
+
+      mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" })
+        await uploadVoiceMessage(audioBlob)
+        stream.getTracks().forEach((track) => track.stop())
+      }
+
+      mediaRecorder.start()
+      setIsRecording(true)
+    } catch (error) {
+      console.error("[v0] Error accessing microphone:", error)
+    }
+  }
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current) {
+      mediaRecorderRef.current.stop()
+      setIsRecording(false)
+    }
+  }
+
+  async function uploadVoiceMessage(audioBlob: Blob) {
+    if (!activeRoom || !currentUserId) return
+
+    try {
+      const fileName = `${currentUserId}/${activeRoom.id}/${Date.now()}-voice.webm`
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from("chat-uploads")
+        .upload(fileName, audioBlob)
+
+      if (uploadError) throw uploadError
+
+      const { data: urlData } = supabase.storage.from("chat-uploads").getPublicUrl(fileName)
+
+      await supabase.from("chat_messages").insert({
+        room_id: activeRoom.id,
+        sender_id: currentUserId,
+        content: "[Voice Message]",
+        message_type: "voice",
+        file_url: urlData.publicUrl,
+        file_name: "voice.webm",
+        file_size: audioBlob.size,
+      })
+    } catch (error) {
+      console.error("[v0] Error uploading voice message:", error)
     }
   }
 
@@ -217,13 +380,14 @@ export default function ChatPage() {
         room_id: activeRoom.id,
         sender_id: currentUserId,
         content: newMessage.trim(),
+        message_type: "text",
       })
 
       if (error) throw error
 
       setNewMessage("")
     } catch (error) {
-      console.error("Error sending message:", error)
+      console.error("[v0] Error sending message:", error)
     } finally {
       setSending(false)
     }
@@ -231,19 +395,45 @@ export default function ChatPage() {
 
   async function handleRoomChange(room: ChatRoom) {
     setActiveRoom(room)
+    setShowNewMessagesButton(false)
+    setNewMessagesCount(0)
     await fetchMessages(room.id)
     await fetchOnlineMembers(room.id)
+    if (currentUserId) {
+      await markRoomAsRead(room.id, currentUserId)
+    }
+  }
+
+  async function markRoomAsRead(roomId: string, userId: string) {
+    try {
+      await supabase
+        .from("unread_messages")
+        .upsert({ room_id: roomId, user_id: userId, unread_count: 0, last_read_at: new Date().toISOString() })
+      setUnreadCounts((prev) => ({ ...prev, [roomId]: 0 }))
+    } catch (error) {
+      console.error("[v0] Error marking room as read:", error)
+    }
+  }
+
+  const handleSearchRooms = (searchTerm: string) => {
+    setSearchRooms(searchTerm)
+    if (!searchTerm.trim()) {
+      setFilteredRooms(chatRooms)
+    } else {
+      const filtered = chatRooms.filter((room) => room.name.toLowerCase().includes(searchTerm.toLowerCase()))
+      setFilteredRooms(filtered)
+    }
   }
 
   const getRoomTypeColor = (type: string) => {
     switch (type) {
-      case "zone":
+      case "Zone":
         return "bg-primary/10 text-primary"
-      case "role":
+      case "Committee":
         return "bg-blue-500/10 text-blue-600"
-      case "general":
+      case "General":
         return "bg-green-500/10 text-green-600"
-      case "training":
+      case "Tournament":
         return "bg-purple-500/10 text-purple-600"
       default:
         return "bg-gray-500/10 text-gray-600"
@@ -269,6 +459,11 @@ export default function ChatPage() {
     return new Date(dateString).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
   }
 
+  const isImageFile = (fileName?: string) => {
+    if (!fileName) return false
+    return /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(fileName)
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-96">
@@ -289,7 +484,7 @@ export default function ChatPage() {
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 h-[calc(100vh-200px)]">
         {/* Chat Rooms Sidebar */}
         <div className="lg:col-span-1">
-          <Card className="h-full">
+          <Card className="h-full flex flex-col">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-lg">Chat Rooms</CardTitle>
@@ -299,12 +494,17 @@ export default function ChatPage() {
               </div>
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
-                <Input placeholder="Search rooms..." className="pl-10" />
+                <Input
+                  placeholder="Search rooms..."
+                  className="pl-10"
+                  value={searchRooms}
+                  onChange={(e) => handleSearchRooms(e.target.value)}
+                />
               </div>
             </CardHeader>
-            <CardContent className="p-0">
+            <CardContent className="flex-1 overflow-y-auto p-0">
               <div className="space-y-1">
-                {chatRooms.map((room) => (
+                {filteredRooms.map((room) => (
                   <div
                     key={room.id}
                     onClick={() => handleRoomChange(room)}
@@ -313,12 +513,9 @@ export default function ChatPage() {
                     }`}
                   >
                     <div
-                      className={`w-10 h-10 rounded-lg flex items-center justify-center ${getRoomTypeColor(room.type)}`}
+                      className={`w-10 h-10 rounded-lg flex items-center justify-center ${getRoomTypeColor(room.room_type)}`}
                     >
-                      {room.type === "zone" && <Hash className="w-5 h-5" />}
-                      {room.type === "role" && <Users className="w-5 h-5" />}
-                      {room.type === "general" && <MessageSquare className="w-5 h-5" />}
-                      {room.type === "training" && <Users className="w-5 h-5" />}
+                      <Hash className="w-5 h-5" />
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between">
@@ -330,12 +527,11 @@ export default function ChatPage() {
                         )}
                       </div>
                       <p className="text-xs text-muted-foreground truncate">{room.description || "No description"}</p>
-                      <p className="text-xs text-muted-foreground">{room.member_count || 0} members</p>
                     </div>
                   </div>
                 ))}
-                {chatRooms.length === 0 && (
-                  <p className="text-center text-muted-foreground py-4">No chat rooms available</p>
+                {filteredRooms.length === 0 && (
+                  <p className="text-center text-muted-foreground py-4">No chat rooms found</p>
                 )}
               </div>
             </CardContent>
@@ -353,7 +549,7 @@ export default function ChatPage() {
                   </div>
                   <div>
                     <h3 className="font-semibold">{activeRoom?.name || "Select a room"}</h3>
-                    <p className="text-sm text-muted-foreground">{activeRoom?.member_count || 0} members</p>
+                    <p className="text-sm text-muted-foreground">{onlineMembers.length} members</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -370,9 +566,13 @@ export default function ChatPage() {
               </div>
             </CardHeader>
 
-            <CardContent className="flex-1 flex flex-col p-0">
-              {/* Messages */}
-              <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            <CardContent className="flex-1 flex flex-col p-0 overflow-hidden">
+              {/* Messages Container */}
+              <div
+                ref={chatContainerRef}
+                onScroll={handleChatScroll}
+                className="flex-1 overflow-y-auto p-4 space-y-4 relative"
+              >
                 {messages.map((message) => {
                   const isOwn = message.sender_id === currentUserId
                   return (
@@ -394,10 +594,43 @@ export default function ChatPage() {
                           </Badge>
                           <p className="text-xs text-muted-foreground">{formatTime(message.created_at)}</p>
                         </div>
-                        <div
-                          className={`p-3 rounded-lg ${isOwn ? "bg-primary text-primary-foreground ml-auto" : "bg-muted"}`}
-                        >
-                          <p className="text-sm">{message.content}</p>
+                        <div className={`${isOwn ? "ml-auto" : ""}`}>
+                          {message.message_type === "text" && (
+                            <div
+                              className={`p-3 rounded-lg ${isOwn ? "bg-primary text-primary-foreground" : "bg-muted"}`}
+                            >
+                              <p className="text-sm">{message.content}</p>
+                            </div>
+                          )}
+                          {message.message_type === "image" && message.file_url && (
+                            <div className={`rounded-lg overflow-hidden ${isOwn ? "ml-auto" : ""}`}>
+                              <img
+                                src={message.file_url || "/placeholder.svg"}
+                                alt={message.file_name}
+                                className="max-w-xs h-auto"
+                              />
+                            </div>
+                          )}
+                          {message.message_type === "file" && message.file_url && (
+                            <a
+                              href={message.file_url}
+                              download
+                              className={`p-3 rounded-lg flex items-center gap-2 ${isOwn ? "bg-primary text-primary-foreground" : "bg-muted"}`}
+                            >
+                              <FileUp className="w-4 h-4" />
+                              <span className="text-sm truncate">{message.file_name}</span>
+                              <Download className="w-4 h-4" />
+                            </a>
+                          )}
+                          {message.message_type === "voice" && message.file_url && (
+                            <div
+                              className={`p-3 rounded-lg ${isOwn ? "bg-primary text-primary-foreground" : "bg-muted"}`}
+                            >
+                              <audio controls className="w-full max-w-xs h-8">
+                                <source src={message.file_url} type="audio/webm" />
+                              </audio>
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -409,9 +642,20 @@ export default function ChatPage() {
                 <div ref={messagesEndRef} />
               </div>
 
+              {/* Scroll to Bottom Button */}
+              {showNewMessagesButton && (
+                <button
+                  onClick={scrollToBottom}
+                  className="absolute bottom-24 right-8 bg-primary text-primary-foreground rounded-full p-2 shadow-lg hover:bg-primary/90 flex items-center gap-2"
+                >
+                  <ChevronDown className="w-5 h-5" />
+                  <span className="text-sm font-medium">{newMessagesCount}</span>
+                </button>
+              )}
+
               {/* Message Input */}
               <form onSubmit={handleSendMessage} className="p-4 border-t">
-                <div className="flex gap-2">
+                <div className="flex gap-2 items-end">
                   <Input
                     placeholder="Type your message..."
                     className="flex-1"
@@ -419,8 +663,28 @@ export default function ChatPage() {
                     onChange={(e) => setNewMessage(e.target.value)}
                     disabled={sending || !activeRoom}
                   />
+                  <input ref={fileInputRef} type="file" onChange={handleFileUpload} className="hidden" accept="*" />
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploadingFile || !activeRoom}
+                  >
+                    {uploadingFile ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileUp className="w-4 h-4" />}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    onClick={isRecording ? stopRecording : startRecording}
+                    disabled={!activeRoom}
+                    className={isRecording ? "bg-red-500/10 text-red-600" : ""}
+                  >
+                    <Mic className="w-4 h-4" />
+                  </Button>
                   <Button type="submit" size="icon" disabled={sending || !newMessage.trim() || !activeRoom}>
-                    {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                    <Send className="w-4 h-4" />
                   </Button>
                 </div>
               </form>
@@ -430,14 +694,14 @@ export default function ChatPage() {
 
         {/* Members Sidebar */}
         <div className="lg:col-span-1">
-          <Card className="h-full">
+          <Card className="h-full flex flex-col">
             <CardHeader className="pb-3">
               <CardTitle className="text-lg">Online Members</CardTitle>
               <CardDescription>
                 {onlineMembers.filter((m) => m.status === "online").length} of {onlineMembers.length} members online
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-3">
+            <CardContent className="flex-1 space-y-3 overflow-y-auto">
               {onlineMembers.map((member) => (
                 <div key={member.id} className="flex items-center gap-3">
                   <div className="relative">

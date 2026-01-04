@@ -1,7 +1,7 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Bell, Trophy, CreditCard, Users, Calendar, MessageSquare, Settings, CheckCheck } from "lucide-react"
+import { Bell, Trophy, Calendar, MessageSquare, Settings, CheckCheck } from "lucide-react"
 import { createClient } from "@/lib/supabase/server"
 import { redirect } from "next/navigation"
 import NotificationItemClient from "@/components/notification-item-client"
@@ -32,55 +32,6 @@ export default async function NotificationsPage() {
   const notifications = await getNotifications(user.id)
 
   const unreadCount = notifications.filter((n) => !n.is_read).length
-
-  const getTypeColor = (type: string) => {
-    switch (type) {
-      case "assignment":
-        return "bg-primary/10 text-primary"
-      case "payment":
-        return "bg-green-500/10 text-green-600"
-      case "system":
-        return "bg-blue-500/10 text-blue-600"
-      case "committee":
-        return "bg-purple-500/10 text-purple-600"
-      case "calendar":
-        return "bg-orange-500/10 text-orange-600"
-      case "chat":
-        return "bg-pink-500/10 text-pink-600"
-      default:
-        return "bg-gray-500/10 text-gray-600"
-    }
-  }
-
-  const getNotificationIcon = (type: string) => {
-    switch (type) {
-      case "assignment":
-        return Trophy
-      case "payment":
-        return CreditCard
-      case "system":
-        return Settings
-      case "committee":
-        return Users
-      case "calendar":
-        return Calendar
-      case "chat":
-        return MessageSquare
-      default:
-        return Bell
-    }
-  }
-
-  const formatTimeAgo = (dateString: string) => {
-    const date = new Date(dateString)
-    const now = new Date()
-    const diffInHours = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60))
-
-    if (diffInHours < 1) return "Just now"
-    if (diffInHours < 24) return `${diffInHours} hours ago`
-    if (diffInHours < 48) return "1 day ago"
-    return `${Math.floor(diffInHours / 24)} days ago`
-  }
 
   return (
     <div className="space-y-6">
@@ -180,13 +131,7 @@ export default async function NotificationsPage() {
             <CardContent className="space-y-4">
               {notifications.length > 0 ? (
                 notifications.map((notification) => (
-                  <NotificationItemClient
-                    key={notification.id}
-                    notification={notification}
-                    getTypeColor={getTypeColor}
-                    getNotificationIcon={getNotificationIcon}
-                    formatTimeAgo={formatTimeAgo}
-                  />
+                  <NotificationItemClient key={notification.id} notification={notification} />
                 ))
               ) : (
                 <p className="text-muted-foreground text-center py-8">No notifications found</p>
@@ -205,15 +150,7 @@ export default async function NotificationsPage() {
               {notifications.filter((n) => !n.is_read).length > 0 ? (
                 notifications
                   .filter((n) => !n.is_read)
-                  .map((notification) => (
-                    <NotificationItemClient
-                      key={notification.id}
-                      notification={notification}
-                      getTypeColor={getTypeColor}
-                      getNotificationIcon={getNotificationIcon}
-                      formatTimeAgo={formatTimeAgo}
-                    />
-                  ))
+                  .map((notification) => <NotificationItemClient key={notification.id} notification={notification} />)
               ) : (
                 <p className="text-muted-foreground text-center py-8">No unread notifications</p>
               )}
@@ -231,15 +168,7 @@ export default async function NotificationsPage() {
               {notifications.filter((n) => n.notification_type === "assignment").length > 0 ? (
                 notifications
                   .filter((n) => n.notification_type === "assignment")
-                  .map((notification) => (
-                    <NotificationItemClient
-                      key={notification.id}
-                      notification={notification}
-                      getTypeColor={getTypeColor}
-                      getNotificationIcon={getNotificationIcon}
-                      formatTimeAgo={formatTimeAgo}
-                    />
-                  ))
+                  .map((notification) => <NotificationItemClient key={notification.id} notification={notification} />)
               ) : (
                 <p className="text-muted-foreground text-center py-8">No assignment notifications</p>
               )}
@@ -257,15 +186,7 @@ export default async function NotificationsPage() {
               {notifications.filter((n) => n.notification_type === "payment").length > 0 ? (
                 notifications
                   .filter((n) => n.notification_type === "payment")
-                  .map((notification) => (
-                    <NotificationItemClient
-                      key={notification.id}
-                      notification={notification}
-                      getTypeColor={getTypeColor}
-                      getNotificationIcon={getNotificationIcon}
-                      formatTimeAgo={formatTimeAgo}
-                    />
-                  ))
+                  .map((notification) => <NotificationItemClient key={notification.id} notification={notification} />)
               ) : (
                 <p className="text-muted-foreground text-center py-8">No payment notifications</p>
               )}
@@ -283,15 +204,7 @@ export default async function NotificationsPage() {
               {notifications.filter((n) => n.notification_type === "system").length > 0 ? (
                 notifications
                   .filter((n) => n.notification_type === "system")
-                  .map((notification) => (
-                    <NotificationItemClient
-                      key={notification.id}
-                      notification={notification}
-                      getTypeColor={getTypeColor}
-                      getNotificationIcon={getNotificationIcon}
-                      formatTimeAgo={formatTimeAgo}
-                    />
-                  ))
+                  .map((notification) => <NotificationItemClient key={notification.id} notification={notification} />)
               ) : (
                 <p className="text-muted-foreground text-center py-8">No system notifications</p>
               )}
