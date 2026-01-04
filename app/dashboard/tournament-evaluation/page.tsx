@@ -106,7 +106,7 @@ export default function TournamentEvaluationPage() {
       const { data: evaluationsData } = await supabase
         .from("tournament_evaluations")
         .select("*")
-        .eq("arbiter_id", user.id)
+        .eq("evaluator_id", user.id)
         .order("created_at", { ascending: false })
 
       if (evaluationsData) {
