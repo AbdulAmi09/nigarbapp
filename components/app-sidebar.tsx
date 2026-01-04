@@ -113,13 +113,13 @@ export function AppSidebar() {
 
   const getArbiterTitle = (level: string | null) => {
     switch (level) {
-      case "international":
+      case "International":
         return "International Arbiter"
-      case "fide":
+      case "FIDE":
         return "FIDE Arbiter"
-      case "national":
+      case "National":
         return "National Arbiter"
-      case "candidate":
+      case "Candidate":
         return "Candidate Arbiter"
       default:
         return "Arbiter"
