@@ -252,13 +252,13 @@ export default function ChatPage() {
 
   const getArbiterTitle = (level: string | null) => {
     switch (level) {
-      case "international":
+      case "International":
         return "IA"
-      case "fide":
+      case "FIDE":
         return "FA"
-      case "national":
+      case "National":
         return "NA"
-      case "candidate":
+      case "Candidate":
         return "CA"
       default:
         return "Arbiter"
