@@ -7,11 +7,14 @@ import { ThemeProvider } from "@/components/theme-provider"
 
 // Use Google Fonts (Vercel-compatible)
 
-import { Inter, Source_Serif_4, Geist as V0_Font_Geist, Geist_Mono as V0_Font_Geist_Mono } from 'next/font/google'
+import { Inter, Source_Serif_4 } from 'next/font/google'
 
 // Initialize fonts
-const _geist = V0_Font_Geist({ subsets: ['latin'], weight: ["100","200","300","400","500","600","700","800","900"], variable: '--v0-font-geist' })
-const _geistMono = V0_Font_Geist_Mono({ subsets: ['latin'], weight: ["100","200","300","400","500","600","700","800","900"], variable: '--v0-font-geist-mono' })
+// Note: "Geist" and "Geist Mono" are not Google fonts and will cause a build error
+// when imported from next/font/google. To keep your existing variables and usage
+// while avoiding the build error, we provide placeholders for those font variables.
+const _geist = { variable: '' }
+const _geistMono = { variable: '' }
 const _sourceSerif_4 = Source_Serif_4({ subsets: ['latin'], weight: ["200","300","400","500","600","700","800","900"], variable: '--v0-font-source-serif-4' })
 const _v0_fontVariables = `${_geist.variable} ${_geistMono.variable} ${_sourceSerif_4.variable}`
 
