@@ -21,6 +21,9 @@ import {
   Mic,
   ChevronDown,
   Download,
+  X,
+  Plus,
+  Pause,
 } from "lucide-react"
 import { createBrowserClient } from "@supabase/ssr"
 import { useEffect, useState, useRef } from "react"
@@ -31,6 +34,9 @@ interface ChatRoom {
   name: string
   room_type: string
   description: string | null
+  logo_url: string | null
+  is_direct_message: boolean
+  direct_message_with: string | null
   member_count?: number
 }
 
@@ -56,13 +62,22 @@ interface OnlineMember {
   status: string
 }
 
+interface SearchUser {
+  id: string
+  name: string
+  email: string
+  avatar_url: string | null
+  arbiter_category: string
+}
+
 export default function ChatPage() {
   const router = useRouter()
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const audioInputRef = useRef<HTMLInputElement>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
+  const recordingStartTimeRef = useRef<number>(0)
+  const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null)
 
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
@@ -78,7 +93,11 @@ export default function ChatPage() {
   const [showNewMessagesButton, setShowNewMessagesButton] = useState(false)
   const [newMessagesCount, setNewMessagesCount] = useState(0)
   const [isRecording, setIsRecording] = useState(false)
+  const [recordingDuration, setRecordingDuration] = useState(0)
   const [uploadingFile, setUploadingFile] = useState(false)
+  const [showDMSearch, setShowDMSearch] = useState(false)
+  const [dmSearchQuery, setDmSearchQuery] = useState("")
+  const [dmSearchResults, setDmSearchResults] = useState<SearchUser[]>([])
   const chatContainerRef = useRef<HTMLDivElement>(null)
 
   const supabase = createBrowserClient(
@@ -99,20 +118,40 @@ export default function ChatPage() {
 
       setCurrentUserId(user.id)
 
-      // Fetch chat rooms
-      const { data: rooms } = await supabase.from("chat_rooms").select("id, name, room_type, description").order("name")
+      // Fetch only rooms where user is a member
+      const { data: memberRooms } = await supabase
+        .from("group_members")
+        .select(
+          `
+          group_id,
+          chat_rooms!inner (
+            id,
+            name,
+            room_type,
+            description,
+            logo_url,
+            is_direct_message,
+            direct_message_with
+          )
+        `,
+        )
+        .eq("user_id", user.id)
 
-      if (rooms && rooms.length > 0) {
-        const roomsWithMembers = rooms.map((room) => ({
-          ...room,
+      if (memberRooms && memberRooms.length > 0) {
+        const rooms: ChatRoom[] = memberRooms.map((m: any) => ({
+          ...m.chat_rooms,
           member_count: 0,
         }))
-        setChatRooms(roomsWithMembers)
-        setFilteredRooms(roomsWithMembers)
-        setActiveRoom(roomsWithMembers[0])
-        await fetchMessages(roomsWithMembers[0].id)
-        await fetchOnlineMembers(roomsWithMembers[0].id)
-        await markRoomAsRead(roomsWithMembers[0].id, user.id)
+
+        setChatRooms(rooms)
+        setFilteredRooms(rooms)
+
+        if (rooms.length > 0) {
+          setActiveRoom(rooms[0])
+          await fetchMessages(rooms[0].id)
+          await fetchOnlineMembers(rooms[0].id)
+          await markRoomAsRead(rooms[0].id, user.id)
+        }
       }
 
       setLoading(false)
@@ -281,14 +320,17 @@ export default function ChatPage() {
     setUploadingFile(true)
 
     try {
-      const fileName = `${currentUserId}/${activeRoom.id}/${Date.now()}-${file.name}`
-      const { data: uploadData, error: uploadError } = await supabase.storage.from("chat-files").upload(fileName, file)
+      const isImage = file.type.startsWith("image/")
+      const bucketName = isImage ? "chat-files" : "chat-files"
+      const folder = isImage ? "images" : "files"
+      const fileName = `${currentUserId}/${activeRoom.id}/${folder}/${Date.now()}-${file.name}`
+
+      const { error: uploadError } = await supabase.storage.from(bucketName).upload(fileName, file)
 
       if (uploadError) throw uploadError
 
-      const { data: urlData } = supabase.storage.from("chat-files").getPublicUrl(fileName)
+      const { data: urlData } = supabase.storage.from(bucketName).getPublicUrl(fileName)
 
-      const isImage = file.type.startsWith("image/")
       const messageType = isImage ? "image" : "file"
 
       await supabase.from("chat_messages").insert({
@@ -317,6 +359,7 @@ export default function ChatPage() {
       const mediaRecorder = new MediaRecorder(stream)
       mediaRecorderRef.current = mediaRecorder
       audioChunksRef.current = []
+      recordingStartTimeRef.current = Date.now()
 
       mediaRecorder.ondataavailable = (event) => {
         audioChunksRef.current.push(event.data)
@@ -326,12 +369,31 @@ export default function ChatPage() {
         const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" })
         await uploadVoiceMessage(audioBlob)
         stream.getTracks().forEach((track) => track.stop())
+        setRecordingDuration(0)
       }
 
       mediaRecorder.start()
       setIsRecording(true)
+
+      // Update recording duration
+      recordingIntervalRef.current = setInterval(() => {
+        const duration = Math.floor((Date.now() - recordingStartTimeRef.current) / 1000)
+        setRecordingDuration(duration)
+      }, 100)
     } catch (error) {
       console.error("[v0] Error accessing microphone:", error)
+    }
+  }
+
+  const pauseRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
+      mediaRecorderRef.current.pause()
+    }
+  }
+
+  const resumeRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === "paused") {
+      mediaRecorderRef.current.resume()
     }
   }
 
@@ -339,6 +401,20 @@ export default function ChatPage() {
     if (mediaRecorderRef.current) {
       mediaRecorderRef.current.stop()
       setIsRecording(false)
+      if (recordingIntervalRef.current) {
+        clearInterval(recordingIntervalRef.current)
+      }
+    }
+  }
+
+  const cancelRecording = () => {
+    if (mediaRecorderRef.current) {
+      mediaRecorderRef.current.stop()
+      audioChunksRef.current = []
+      setIsRecording(false)
+      if (recordingIntervalRef.current) {
+        clearInterval(recordingIntervalRef.current)
+      }
     }
   }
 
@@ -347,9 +423,7 @@ export default function ChatPage() {
 
     try {
       const fileName = `${currentUserId}/${activeRoom.id}/${Date.now()}-voice.webm`
-      const { data: uploadData, error: uploadError } = await supabase.storage
-        .from("chat-uploads")
-        .upload(fileName, audioBlob)
+      const { error: uploadError } = await supabase.storage.from("chat-uploads").upload(fileName, audioBlob)
 
       if (uploadError) throw uploadError
 
@@ -363,9 +437,59 @@ export default function ChatPage() {
         file_url: urlData.publicUrl,
         file_name: "voice.webm",
         file_size: audioBlob.size,
+        duration: recordingDuration,
       })
     } catch (error) {
       console.error("[v0] Error uploading voice message:", error)
+    }
+  }
+
+  const searchUsersForDM = async (query: string) => {
+    setDmSearchQuery(query)
+    if (!query.trim()) {
+      setDmSearchResults([])
+      return
+    }
+
+    const { data } = await supabase.rpc("search_users_for_dm", { p_search_query: query, p_limit: 10 })
+
+    if (data) {
+      setDmSearchResults(data)
+    }
+  }
+
+  const createDirectMessage = async (otherUserId: string) => {
+    if (!currentUserId) return
+
+    try {
+      const { data: roomId } = await supabase.rpc("get_or_create_dm_room", {
+        p_user_id: currentUserId,
+        p_other_user_id: otherUserId,
+      })
+
+      if (roomId) {
+        // Fetch the new room data
+        const { data: newRoom } = await supabase.from("chat_rooms").select("*").eq("id", roomId).single()
+
+        if (newRoom) {
+          const room: ChatRoom = {
+            ...newRoom,
+            member_count: 2,
+          }
+          setChatRooms((prev) => [room, ...prev])
+          setFilteredRooms((prev) => [room, ...prev])
+          setActiveRoom(room)
+          await fetchMessages(room.id)
+          await fetchOnlineMembers(room.id)
+          await markRoomAsRead(room.id, currentUserId)
+        }
+      }
+
+      setShowDMSearch(false)
+      setDmSearchQuery("")
+      setDmSearchResults([])
+    } catch (error) {
+      console.error("[v0] Error creating DM:", error)
     }
   }
 
@@ -406,9 +530,7 @@ export default function ChatPage() {
 
   async function markRoomAsRead(roomId: string, userId: string) {
     try {
-      await supabase
-        .from("unread_messages")
-        .upsert({ room_id: roomId, user_id: userId, unread_count: 0, last_read_at: new Date().toISOString() })
+      await supabase.rpc("mark_messages_as_read", { p_user_id: userId, p_room_id: roomId })
       setUnreadCounts((prev) => ({ ...prev, [roomId]: 0 }))
     } catch (error) {
       console.error("[v0] Error marking room as read:", error)
@@ -459,9 +581,10 @@ export default function ChatPage() {
     return new Date(dateString).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
   }
 
-  const isImageFile = (fileName?: string) => {
-    if (!fileName) return false
-    return /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(fileName)
+  const formatDuration = (seconds: number) => {
+    const mins = Math.floor(seconds / 60)
+    const secs = seconds % 60
+    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`
   }
 
   if (loading) {
@@ -484,12 +607,17 @@ export default function ChatPage() {
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 h-[calc(100vh-200px)]">
         {/* Chat Rooms Sidebar */}
         <div className="lg:col-span-1">
-          <Card className="h-full flex flex-col">
+          <Card className="h-full flex flex-col overflow-hidden">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-lg">Chat Rooms</CardTitle>
-                <Button variant="ghost" size="icon">
-                  <MoreVertical className="w-4 h-4" />
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setShowDMSearch(!showDMSearch)}
+                  title="Start direct message"
+                >
+                  <Plus className="w-4 h-4" />
                 </Button>
               </div>
               <div className="relative">
@@ -502,6 +630,43 @@ export default function ChatPage() {
                 />
               </div>
             </CardHeader>
+
+            {showDMSearch && (
+              <div className="p-3 border-b bg-muted/50">
+                <div className="flex items-center gap-2 mb-2">
+                  <Input
+                    placeholder="Search users..."
+                    value={dmSearchQuery}
+                    onChange={(e) => searchUsersForDM(e.target.value)}
+                    className="flex-1"
+                  />
+                  <Button variant="ghost" size="icon" onClick={() => setShowDMSearch(false)}>
+                    <X className="w-4 h-4" />
+                  </Button>
+                </div>
+                {dmSearchResults.length > 0 && (
+                  <div className="space-y-1 max-h-40 overflow-y-auto">
+                    {dmSearchResults.map((user) => (
+                      <button
+                        key={user.id}
+                        onClick={() => createDirectMessage(user.id)}
+                        className="w-full flex items-center gap-2 p-2 rounded hover:bg-muted/70 text-left"
+                      >
+                        <Avatar className="w-6 h-6">
+                          <AvatarImage src={user.avatar_url || ""} alt={user.name} />
+                          <AvatarFallback>{user.name[0]}</AvatarFallback>
+                        </Avatar>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{user.name}</p>
+                          <p className="text-xs text-muted-foreground truncate">{user.email}</p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             <CardContent className="flex-1 overflow-y-auto p-0">
               <div className="space-y-1">
                 {filteredRooms.map((room) => (
@@ -512,11 +677,19 @@ export default function ChatPage() {
                       activeRoom?.id === room.id ? "bg-primary/10" : ""
                     }`}
                   >
-                    <div
-                      className={`w-10 h-10 rounded-lg flex items-center justify-center ${getRoomTypeColor(room.room_type)}`}
-                    >
-                      <Hash className="w-5 h-5" />
-                    </div>
+                    {room.logo_url ? (
+                      <img
+                        src={room.logo_url || "/placeholder.svg"}
+                        alt={room.name}
+                        className="w-10 h-10 rounded-lg object-cover"
+                      />
+                    ) : (
+                      <div
+                        className={`w-10 h-10 rounded-lg flex items-center justify-center ${getRoomTypeColor(room.room_type)}`}
+                      >
+                        {room.is_direct_message ? <MessageSquare className="w-5 h-5" /> : <Hash className="w-5 h-5" />}
+                      </div>
+                    )}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between">
                         <p className="font-medium truncate">{room.name}</p>
@@ -540,13 +713,25 @@ export default function ChatPage() {
 
         {/* Main Chat Area */}
         <div className="lg:col-span-2">
-          <Card className="h-full flex flex-col">
+          <Card className="h-full flex flex-col overflow-hidden">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-primary/10 rounded-lg flex items-center justify-center">
-                    <Hash className="w-5 h-5 text-primary" />
-                  </div>
+                  {activeRoom?.logo_url ? (
+                    <img
+                      src={activeRoom.logo_url || "/placeholder.svg"}
+                      alt={activeRoom.name}
+                      className="w-10 h-10 rounded-lg object-cover"
+                    />
+                  ) : (
+                    <div className="w-10 h-10 bg-primary/10 rounded-lg flex items-center justify-center">
+                      {activeRoom?.is_direct_message ? (
+                        <MessageSquare className="w-5 h-5 text-primary" />
+                      ) : (
+                        <Hash className="w-5 h-5 text-primary" />
+                      )}
+                    </div>
+                  )}
                   <div>
                     <h3 className="font-semibold">{activeRoom?.name || "Select a room"}</h3>
                     <p className="text-sm text-muted-foreground">{onlineMembers.length} members</p>
@@ -567,7 +752,7 @@ export default function ChatPage() {
             </CardHeader>
 
             <CardContent className="flex-1 flex flex-col p-0 overflow-hidden">
-              {/* Messages Container */}
+              {/* Messages Container - Proper scroll containment */}
               <div
                 ref={chatContainerRef}
                 onScroll={handleChatScroll}
@@ -653,6 +838,41 @@ export default function ChatPage() {
                 </button>
               )}
 
+              {isRecording && (
+                <div className="px-4 py-3 bg-red-500/10 border-t border-red-200 flex items-center gap-3">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
+                      <span className="text-sm font-medium text-red-600">Recording...</span>
+                      <span className="text-sm text-red-600 ml-auto">{formatDuration(recordingDuration)}</span>
+                    </div>
+                    <div className="mt-2 h-6 bg-red-200/50 rounded flex items-center overflow-hidden">
+                      {Array.from({ length: 20 }).map((_, i) => (
+                        <div
+                          key={i}
+                          className="flex-1 h-full bg-red-500 mx-0.5"
+                          style={{
+                            opacity: Math.random() * 0.5 + 0.5,
+                            animation: `pulse 0.3s ease-in-out ${i * 0.05}s infinite`,
+                          }}
+                        ></div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="destructive" onClick={cancelRecording}>
+                      <X className="w-4 h-4" />
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={pauseRecording}>
+                      <Pause className="w-4 h-4" />
+                    </Button>
+                    <Button size="sm" onClick={stopRecording}>
+                      <Send className="w-4 h-4" />
+                    </Button>
+                  </div>
+                </div>
+              )}
+
               {/* Message Input */}
               <form onSubmit={handleSendMessage} className="p-4 border-t">
                 <div className="flex gap-2 items-end">
@@ -661,15 +881,15 @@ export default function ChatPage() {
                     className="flex-1"
                     value={newMessage}
                     onChange={(e) => setNewMessage(e.target.value)}
-                    disabled={sending || !activeRoom}
+                    disabled={sending || !activeRoom || isRecording}
                   />
-                  <input ref={fileInputRef} type="file" onChange={handleFileUpload} className="hidden" accept="*" />
+                  <input ref={fileInputRef} type="file" onChange={handleFileUpload} className="hidden" />
                   <Button
                     type="button"
                     size="icon"
                     variant="ghost"
                     onClick={() => fileInputRef.current?.click()}
-                    disabled={uploadingFile || !activeRoom}
+                    disabled={uploadingFile || !activeRoom || isRecording}
                   >
                     {uploadingFile ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileUp className="w-4 h-4" />}
                   </Button>
@@ -683,7 +903,11 @@ export default function ChatPage() {
                   >
                     <Mic className="w-4 h-4" />
                   </Button>
-                  <Button type="submit" size="icon" disabled={sending || !newMessage.trim() || !activeRoom}>
+                  <Button
+                    type="submit"
+                    size="icon"
+                    disabled={sending || !newMessage.trim() || !activeRoom || isRecording}
+                  >
                     <Send className="w-4 h-4" />
                   </Button>
                 </div>
@@ -694,7 +918,7 @@ export default function ChatPage() {
 
         {/* Members Sidebar */}
         <div className="lg:col-span-1">
-          <Card className="h-full flex flex-col">
+          <Card className="h-full flex flex-col overflow-hidden">
             <CardHeader className="pb-3">
               <CardTitle className="text-lg">Online Members</CardTitle>
               <CardDescription>
