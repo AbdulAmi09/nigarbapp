@@ -63,16 +63,15 @@ export default function TournamentEvaluationModal({
     try {
       const { error } = await supabase.from("tournament_evaluations").insert({
         tournament_id: tournament.tournament_id,
-        arbiter_id: userId,
+        evaluator_id: userId,
         organization_rating: Number.parseInt(formData.organization_rating),
-        arbiters_coordination_rating: Number.parseInt(formData.arbiters_coordination_rating),
-        venue_quality_rating: Number.parseInt(formData.venue_quality_rating),
+        communication_rating: Number.parseInt(formData.arbiters_coordination_rating),
+        venue_rating: Number.parseInt(formData.venue_quality_rating),
         time_management_rating: Number.parseInt(formData.time_management_rating),
         overall_rating: Number.parseInt(formData.overall_rating),
-        strengths: formData.strengths,
-        improvements: formData.improvements,
-        additional_comments: formData.additional_comments,
-        created_at: new Date().toISOString(),
+        positive_feedback: formData.strengths,
+        areas_for_improvement: formData.improvements,
+        recommendations: formData.additional_comments,
       })
 
       if (error) throw error
@@ -83,7 +82,6 @@ export default function TournamentEvaluationModal({
         title: "Evaluation Submitted",
         message: `Your evaluation for ${tournament.name} has been submitted successfully.`,
         notification_type: "system",
-        is_important: false,
       })
 
       onSuccess?.()

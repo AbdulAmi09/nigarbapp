@@ -44,7 +44,6 @@ export async function POST(request: NextRequest) {
       title: `Assignment ${status}`,
       message: `You have ${status.toLowerCase()} the tournament assignment.`,
       notification_type: "assignment",
-      is_important: status === "Declined",
     })
 
     return NextResponse.json({ success: true, status })

@@ -11,7 +11,7 @@ async function getExecutives(supabase: any) {
   const { data: executives } = await supabase
     .from("profiles")
     .select("*")
-    .in("arbiter_level", ["International Arbiter", "FIDE Master", "National Arbiter", "International Master"])
+    .in("arbiter_level", ["International", "FIDE", "National", "Candidate"])
     .eq("is_verified", true)
     .order("created_at", { ascending: false })
 

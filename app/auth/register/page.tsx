@@ -132,12 +132,12 @@ export default function RegisterPage() {
                     <SelectValue placeholder="Select your zone" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="Northcentral">North Central</SelectItem>
-                    <SelectItem value="Northeast">North East</SelectItem>
-                    <SelectItem value="Northwest">North West</SelectItem>
-                    <SelectItem value="Southeast">South East</SelectItem>
-                    <SelectItem value="Southsouth">South South</SelectItem>
-                    <SelectItem value="Southwest">South West</SelectItem>
+                    <SelectItem value="North">North</SelectItem>
+                    <SelectItem value="South">South</SelectItem>
+                    <SelectItem value="East">East</SelectItem>
+                    <SelectItem value="West">West</SelectItem>
+                    <SelectItem value="Central">Central</SelectItem>
+                    <SelectItem value="FCT">FCT</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

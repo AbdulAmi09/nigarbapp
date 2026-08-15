@@ -4,7 +4,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Bell, Trophy, Calendar, MessageSquare, Settings, CheckCheck } from "lucide-react"
 import { createClient } from "@/lib/supabase/server"
 import { redirect } from "next/navigation"
+import Link from "next/link"
 import NotificationItemClient from "@/components/notification-item-client"
+import MarkAllReadButton from "@/components/mark-all-read-button"
 
 async function getNotifications(userId: string) {
   const supabase = await createClient()
@@ -43,13 +45,12 @@ export default async function NotificationsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm">
-            <CheckCheck className="w-4 h-4 mr-2" />
-            Mark All Read
-          </Button>
-          <Button variant="outline" size="sm">
-            <Settings className="w-4 h-4 mr-2" />
-            Settings
+          <MarkAllReadButton userId={user.id} />
+          <Button variant="outline" size="sm" asChild>
+            <Link href="/dashboard/settings">
+              <Settings className="w-4 h-4 mr-2" />
+              Settings
+            </Link>
           </Button>
         </div>
       </div>
@@ -72,8 +73,8 @@ export default async function NotificationsPage() {
           <CardContent className="pt-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-muted-foreground">High Priority</p>
-                <p className="text-2xl font-bold">{notifications.filter((n) => n.is_important).length}</p>
+                <p className="text-sm font-medium text-muted-foreground">Action Required</p>
+                <p className="text-2xl font-bold">{notifications.filter((n) => n.action_required).length}</p>
               </div>
               <Trophy className="h-8 w-8 text-muted-foreground" />
             </div>
@@ -165,9 +166,9 @@ export default async function NotificationsPage() {
               <CardDescription>Tournament assignments and related updates</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {notifications.filter((n) => n.notification_type === "assignment").length > 0 ? (
+              {notifications.filter((n) => n.notification_type?.toLowerCase() === "assignment").length > 0 ? (
                 notifications
-                  .filter((n) => n.notification_type === "assignment")
+                  .filter((n) => n.notification_type?.toLowerCase() === "assignment")
                   .map((notification) => <NotificationItemClient key={notification.id} notification={notification} />)
               ) : (
                 <p className="text-muted-foreground text-center py-8">No assignment notifications</p>
@@ -183,9 +184,9 @@ export default async function NotificationsPage() {
               <CardDescription>Payment processing and financial updates</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {notifications.filter((n) => n.notification_type === "payment").length > 0 ? (
+              {notifications.filter((n) => n.notification_type?.toLowerCase() === "payment").length > 0 ? (
                 notifications
-                  .filter((n) => n.notification_type === "payment")
+                  .filter((n) => n.notification_type?.toLowerCase() === "payment")
                   .map((notification) => <NotificationItemClient key={notification.id} notification={notification} />)
               ) : (
                 <p className="text-muted-foreground text-center py-8">No payment notifications</p>
@@ -201,9 +202,9 @@ export default async function NotificationsPage() {
               <CardDescription>System updates and maintenance announcements</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {notifications.filter((n) => n.notification_type === "system").length > 0 ? (
+              {notifications.filter((n) => n.notification_type?.toLowerCase() === "system").length > 0 ? (
                 notifications
-                  .filter((n) => n.notification_type === "system")
+                  .filter((n) => n.notification_type?.toLowerCase() === "system")
                   .map((notification) => <NotificationItemClient key={notification.id} notification={notification} />)
               ) : (
                 <p className="text-muted-foreground text-center py-8">No system notifications</p>

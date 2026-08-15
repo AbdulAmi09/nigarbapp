@@ -7,6 +7,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Trophy, Calendar, MapPin, Users, Clock, CheckCircle, AlertCircle, XCircle, Filter, Search } from "lucide-react"
 import { createClient } from "@/lib/supabase/server"
 import { redirect } from "next/navigation"
+import Link from "next/link"
+import AssignmentActions from "@/components/assignment-actions"
 
 async function getAssignmentData(userId: string) {
   const supabase = await createClient()
@@ -36,17 +38,13 @@ export default async function TournamentAssignmentPage() {
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case "accepted":
-      case "confirmed":
+      case "Accepted":
         return "bg-green-500/10 text-green-600 border-green-500/20"
-      case "pending":
+      case "Pending":
         return "bg-yellow-500/10 text-yellow-600 border-yellow-500/20"
-      case "assigned":
-      case "available":
-        return "bg-blue-500/10 text-blue-600 border-blue-500/20"
-      case "declined":
+      case "Declined":
         return "bg-red-500/10 text-red-600 border-red-500/20"
-      case "completed":
+      case "Completed":
         return "bg-purple-500/10 text-purple-600 border-purple-500/20"
       default:
         return "bg-gray-500/10 text-gray-600 border-gray-500/20"
@@ -55,16 +53,12 @@ export default async function TournamentAssignmentPage() {
 
   const getStatusIcon = (status: string) => {
     switch (status) {
-      case "accepted":
-      case "confirmed":
-      case "completed":
+      case "Accepted":
+      case "Completed":
         return <CheckCircle className="w-4 h-4" />
-      case "pending":
+      case "Pending":
         return <Clock className="w-4 h-4" />
-      case "assigned":
-      case "available":
-        return <AlertCircle className="w-4 h-4" />
-      case "declined":
+      case "Declined":
         return <XCircle className="w-4 h-4" />
       default:
         return <AlertCircle className="w-4 h-4" />
@@ -80,11 +74,9 @@ export default async function TournamentAssignmentPage() {
     return new Date(dateString).toLocaleDateString()
   }
 
-  const confirmedCount = assignments.filter(
-    (a) => a.assignment_status === "accepted" || a.assignment_status === "confirmed",
-  ).length
-  const pendingCount = assignments.filter((a) => a.assignment_status === "pending").length
-  const availableCount = assignments.filter((a) => a.assignment_status === "assigned").length
+  const confirmedCount = assignments.filter((a) => a.assignment_status === "Accepted").length
+  const pendingCount = assignments.filter((a) => a.assignment_status === "Pending").length
+  const completedCount = assignments.filter((a) => a.assignment_status === "Completed").length
   const thisMonthCount = assignments.filter((a) => {
     const assignmentDate = new Date(a.start_date)
     const now = new Date()
@@ -134,10 +126,10 @@ export default async function TournamentAssignmentPage() {
           <CardContent className="pt-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-muted-foreground">Assigned</p>
-                <p className="text-2xl font-bold">{availableCount}</p>
+                <p className="text-sm font-medium text-muted-foreground">Completed</p>
+                <p className="text-2xl font-bold">{completedCount}</p>
               </div>
-              <AlertCircle className="h-8 w-8 text-blue-500" />
+              <Trophy className="h-8 w-8 text-purple-500" />
             </div>
           </CardContent>
         </Card>
@@ -172,11 +164,10 @@ export default async function TournamentAssignmentPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Status</SelectItem>
-                  <SelectItem value="accepted">Accepted</SelectItem>
-                  <SelectItem value="pending">Pending</SelectItem>
-                  <SelectItem value="assigned">Assigned</SelectItem>
-                  <SelectItem value="declined">Declined</SelectItem>
-                  <SelectItem value="completed">Completed</SelectItem>
+                  <SelectItem value="Accepted">Accepted</SelectItem>
+                  <SelectItem value="Pending">Pending</SelectItem>
+                  <SelectItem value="Declined">Declined</SelectItem>
+                  <SelectItem value="Completed">Completed</SelectItem>
                 </SelectContent>
               </Select>
               <Select>
@@ -204,7 +195,7 @@ export default async function TournamentAssignmentPage() {
           <TabsTrigger value="all">All Assignments</TabsTrigger>
           <TabsTrigger value="pending">Pending Response</TabsTrigger>
           <TabsTrigger value="confirmed">Confirmed</TabsTrigger>
-          <TabsTrigger value="available">Available</TabsTrigger>
+          <TabsTrigger value="completed">Completed</TabsTrigger>
         </TabsList>
 
         <TabsContent value="all" className="space-y-4">
@@ -279,24 +270,10 @@ export default async function TournamentAssignmentPage() {
                       </div>
 
                       <div className="flex flex-col gap-2 lg:w-48">
-                        {assignment.assignment_status === "assigned" && (
-                          <>
-                            <Button className="w-full">Accept Assignment</Button>
-                            <Button variant="outline" className="w-full bg-transparent">
-                              Decline
-                            </Button>
-                          </>
+                        {assignment.assignment_status === "Pending" && (
+                          <AssignmentActions assignmentId={assignment.id} />
                         )}
-                        {assignment.assignment_status === "pending" && (
-                          <>
-                            <Button className="w-full">Confirm</Button>
-                            <Button variant="outline" className="w-full bg-transparent">
-                              Request Changes
-                            </Button>
-                          </>
-                        )}
-                        {(assignment.assignment_status === "accepted" ||
-                          assignment.assignment_status === "confirmed") && (
+                        {assignment.assignment_status === "Accepted" && (
                           <>
                             <Button variant="outline" className="w-full bg-transparent">
                               View Details
@@ -306,18 +283,18 @@ export default async function TournamentAssignmentPage() {
                             </Button>
                           </>
                         )}
-                        {assignment.assignment_status === "declined" && (
+                        {assignment.assignment_status === "Declined" && (
                           <Button variant="outline" className="w-full bg-transparent">
                             View Details
                           </Button>
                         )}
-                        {assignment.assignment_status === "completed" && (
+                        {assignment.assignment_status === "Completed" && (
                           <>
                             <Button variant="outline" className="w-full bg-transparent">
                               View Report
                             </Button>
-                            <Button variant="outline" className="w-full bg-transparent">
-                              Submit Evaluation
+                            <Button variant="outline" className="w-full bg-transparent" asChild>
+                              <Link href="/dashboard/tournament-evaluation">Submit Evaluation</Link>
                             </Button>
                           </>
                         )}
@@ -338,9 +315,9 @@ export default async function TournamentAssignmentPage() {
 
         <TabsContent value="pending" className="space-y-4">
           <div className="space-y-4">
-            {assignments.filter((a) => a.assignment_status === "pending").length > 0 ? (
+            {assignments.filter((a) => a.assignment_status === "Pending").length > 0 ? (
               assignments
-                .filter((a) => a.assignment_status === "pending")
+                .filter((a) => a.assignment_status === "Pending")
                 .map((assignment) => (
                   <Card key={assignment.id}>
                     <CardContent className="pt-6">
@@ -393,13 +370,7 @@ export default async function TournamentAssignmentPage() {
                         </div>
 
                         <div className="flex flex-col gap-2 lg:w-48">
-                          <Button className="w-full">Confirm Assignment</Button>
-                          <Button variant="outline" className="w-full bg-transparent">
-                            Request Changes
-                          </Button>
-                          <Button variant="outline" className="w-full bg-transparent">
-                            Decline
-                          </Button>
+                          <AssignmentActions assignmentId={assignment.id} />
                         </div>
                       </div>
                     </CardContent>
@@ -417,10 +388,9 @@ export default async function TournamentAssignmentPage() {
 
         <TabsContent value="confirmed" className="space-y-4">
           <div className="space-y-4">
-            {assignments.filter((a) => a.assignment_status === "accepted" || a.assignment_status === "confirmed")
-              .length > 0 ? (
+            {assignments.filter((a) => a.assignment_status === "Accepted").length > 0 ? (
               assignments
-                .filter((a) => a.assignment_status === "accepted" || a.assignment_status === "confirmed")
+                .filter((a) => a.assignment_status === "Accepted")
                 .map((assignment) => (
                   <Card key={assignment.id}>
                     <CardContent className="pt-6">
@@ -498,11 +468,11 @@ export default async function TournamentAssignmentPage() {
           </div>
         </TabsContent>
 
-        <TabsContent value="available" className="space-y-4">
+        <TabsContent value="completed" className="space-y-4">
           <div className="space-y-4">
-            {assignments.filter((a) => a.assignment_status === "assigned").length > 0 ? (
+            {assignments.filter((a) => a.assignment_status === "Completed").length > 0 ? (
               assignments
-                .filter((a) => a.assignment_status === "assigned")
+                .filter((a) => a.assignment_status === "Completed")
                 .map((assignment) => (
                   <Card key={assignment.id}>
                     <CardContent className="pt-6">
@@ -546,21 +516,21 @@ export default async function TournamentAssignmentPage() {
                             </div>
                           </div>
 
-                          <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                            <p className="text-sm text-blue-800">
-                              <AlertCircle className="w-4 h-4 inline mr-1" />
-                              New assignment - Please respond
+                          <div className="p-3 bg-purple-50 border border-purple-200 rounded-lg">
+                            <p className="text-sm text-purple-800">
+                              <CheckCircle className="w-4 h-4 inline mr-1" />
+                              Tournament completed
+                              {assignment.compensation && ` - Fee: ${formatCurrency(Number(assignment.compensation))}`}
                             </p>
                           </div>
                         </div>
 
                         <div className="flex flex-col gap-2 lg:w-48">
-                          <Button className="w-full">Accept Assignment</Button>
                           <Button variant="outline" className="w-full bg-transparent">
-                            View Details
+                            View Report
                           </Button>
-                          <Button variant="outline" className="w-full bg-transparent">
-                            Decline
+                          <Button variant="outline" className="w-full bg-transparent" asChild>
+                            <Link href="/dashboard/tournament-evaluation">Submit Evaluation</Link>
                           </Button>
                         </div>
                       </div>
@@ -570,7 +540,7 @@ export default async function TournamentAssignmentPage() {
             ) : (
               <Card>
                 <CardContent className="pt-6">
-                  <p className="text-muted-foreground text-center py-8">No available assignments</p>
+                  <p className="text-muted-foreground text-center py-8">No completed assignments</p>
                 </CardContent>
               </Card>
             )}

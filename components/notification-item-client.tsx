@@ -36,7 +36,7 @@ export default function NotificationItemClient({ notification }: NotificationIte
   )
 
   const getTypeColor = (type: string) => {
-    switch (type) {
+    switch (type?.toLowerCase()) {
       case "assignment":
         return "bg-primary/10 text-primary"
       case "payment":
@@ -55,7 +55,7 @@ export default function NotificationItemClient({ notification }: NotificationIte
   }
 
   const getNotificationIcon = (type: string): React.ComponentType<any> => {
-    switch (type) {
+    switch (type?.toLowerCase()) {
       case "assignment":
         return Trophy
       case "payment":

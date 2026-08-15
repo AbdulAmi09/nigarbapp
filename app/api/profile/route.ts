@@ -38,7 +38,31 @@ export async function PUT(request: NextRequest) {
     }
 
     const body = await request.json()
-    const { data, error } = await supabase.from("profiles").update(body).eq("id", user.id).select().single()
+
+    // Only allow arbiters to edit their own self-service fields; credentials
+    // like arbiter_level, license_number, is_verified must stay admin-only.
+    const EDITABLE_FIELDS = [
+      "first_name",
+      "last_name",
+      "phone",
+      "date_of_birth",
+      "gender",
+      "address",
+      "city",
+      "state",
+      "country",
+      "zone",
+      "bio",
+      "avatar_url",
+      "years_experience",
+    ] as const
+
+    const updates: Record<string, unknown> = {}
+    for (const field of EDITABLE_FIELDS) {
+      if (field in body) updates[field] = body[field]
+    }
+
+    const { data, error } = await supabase.from("profiles").update(updates).eq("id", user.id).select().single()
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 })

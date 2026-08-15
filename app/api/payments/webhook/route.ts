@@ -21,65 +21,53 @@ export async function POST(request: NextRequest) {
 
     const supabase = await createClient()
 
+    // The webhook is called by Paystack directly with no arbiter session, so RLS
+    // blocks any direct table write here. record_paystack_payment() is a
+    // SECURITY DEFINER function scoped to exactly this: recording the
+    // transaction, updating the payment, and notifying the arbiter atomically.
     if (body.event === "charge.success") {
       const {
         reference,
         amount,
         customer: { email } = {},
         authorization,
+        metadata,
       } = body.data
 
-      const { data: transaction, error: txnError } = await supabase
-        .from("paystack_transactions")
-        .insert({
-          reference,
-          amount: amount / 100, // Convert from kobo to naira
-          customer_email: email,
-          status: "success",
-          authorization_code: authorization?.authorization_code,
-          last_four: authorization?.last4,
-          channel: authorization?.channel,
-          paid_at: new Date().toISOString(),
-        })
-        .select()
-        .single()
+      const { error: rpcError } = await supabase.rpc("record_paystack_payment", {
+        p_reference: reference,
+        p_payment_id: metadata?.payment_id ?? null,
+        p_amount: amount / 100, // Convert from kobo to naira
+        p_customer_email: email ?? null,
+        p_authorization_code: authorization?.authorization_code ?? null,
+        p_last_four: authorization?.last4 ?? null,
+        p_channel: authorization?.channel ?? null,
+        p_status: "success",
+      })
 
-      if (txnError) {
-        console.error("[v0] Error inserting transaction:", txnError)
+      if (rpcError) {
+        console.error("[v0] Error recording successful payment:", rpcError)
         return NextResponse.json({ error: "Failed to process transaction" }, { status: 500 })
-      }
-
-      const { data: payment, error: paymentError } = await supabase
-        .from("payments")
-        .update({
-          payment_status: "paid",
-          paid_date: new Date().toISOString(),
-          payment_method: "paystack",
-          transaction_reference: reference,
-        })
-        .eq("id", transaction?.payment_id)
-        .select()
-        .single()
-
-      if (paymentError) {
-        console.error("[v0] Error updating payment:", paymentError)
-      }
-
-      if (payment) {
-        await supabase.from("notifications").insert({
-          recipient_id: payment.arbiter_id,
-          title: "Payment Successful",
-          message: `Your payment of ₦${(amount / 100).toLocaleString()} has been received successfully.`,
-          notification_type: "payment",
-          is_important: false,
-        })
       }
     }
 
     if (body.event === "charge.failed") {
-      const { reference } = body.data
+      const { reference, amount, customer: { email } = {}, authorization, metadata } = body.data
 
-      await supabase.from("paystack_transactions").update({ status: "failed" }).eq("reference", reference)
+      const { error: rpcError } = await supabase.rpc("record_paystack_payment", {
+        p_reference: reference,
+        p_payment_id: metadata?.payment_id ?? null,
+        p_amount: amount / 100,
+        p_customer_email: email ?? null,
+        p_authorization_code: authorization?.authorization_code ?? null,
+        p_last_four: authorization?.last4 ?? null,
+        p_channel: authorization?.channel ?? null,
+        p_status: "failed",
+      })
+
+      if (rpcError) {
+        console.error("[v0] Error recording failed payment:", rpcError)
+      }
     }
 
     return NextResponse.json({ success: true }, { status: 200 })

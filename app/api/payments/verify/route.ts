@@ -23,15 +23,19 @@ export async function POST(request: NextRequest) {
 
     if (transaction.status === "success") {
       // Update payment record
-      await supabase
+      const { error: updateError } = await supabase
         .from("payments")
         .update({
-          status: "paid",
+          payment_status: "paid",
           paid_date: new Date().toISOString(),
           payment_method: transaction.channel,
-          amount: transaction.amount / 100, // Convert from kobo
         })
         .eq("transaction_reference", reference)
+
+      if (updateError) {
+        console.error("[v0] Payment verify update error:", updateError)
+        return NextResponse.json({ error: "Failed to record verified payment" }, { status: 500 })
+      }
 
       return NextResponse.json({
         success: true,
@@ -39,7 +43,14 @@ export async function POST(request: NextRequest) {
         transaction,
       })
     } else {
-      await supabase.from("payments").update({ status: "failed" }).eq("transaction_reference", reference)
+      const { error: updateError } = await supabase
+        .from("payments")
+        .update({ payment_status: "cancelled" })
+        .eq("transaction_reference", reference)
+
+      if (updateError) {
+        console.error("[v0] Payment verify update error:", updateError)
+      }
 
       return NextResponse.json({
         success: false,

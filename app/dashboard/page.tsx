@@ -51,8 +51,8 @@ export default async function DashboardPage() {
   const { profile, stats, assignments, notifications } = await getDashboardData(user.id)
   
   const displayName = profile?.first_name
-  ? ` ${profile.a_l ?? ""} ${profile.first_name} ${profile.last_name ?? ""}`.trim()
-  : "Arbiter"
+    ? `${profile.first_name} ${profile.last_name ?? ""}`.trim()
+    : "Arbiter"
 
 
 
