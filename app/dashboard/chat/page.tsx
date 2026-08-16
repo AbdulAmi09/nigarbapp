@@ -542,7 +542,7 @@ export default function ChatPage() {
         .from("chat_rooms")
         .insert({
           name: groupName.trim(),
-          room_type: "Group",
+          room_type: "Private",
           is_private: true,
           is_direct_message: false,
           created_by: currentUserId,

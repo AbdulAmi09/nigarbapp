@@ -90,7 +90,7 @@ export default function SettingsPage() {
         .from("notification_preferences")
         .select("*")
         .eq("user_id", user.id)
-        .single()
+        .maybeSingle()
 
       if (prefs) {
         setEmailNotifications(prefs.email_notifications)
