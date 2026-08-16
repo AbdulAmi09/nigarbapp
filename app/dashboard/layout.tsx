@@ -5,6 +5,7 @@ import { Header } from "@/components/header"
 import { redirect } from "next/navigation"
 import { createClient } from "@/lib/supabase/server"
 import CallProvider from "@/components/call-provider"
+import PresenceProvider from "@/components/presence-provider"
 
 export default async function DashboardLayout({
   children,
@@ -27,16 +28,18 @@ export default async function DashboardLayout({
   }
 
   return (
-    <CallProvider>
-      <SidebarProvider>
-        <div className="flex min-h-screen w-full">
-          <AppSidebar />
-          <div className="flex-1 flex flex-col">
-            <Header />
-            <main className="flex-1 p-6 bg-muted/20">{children}</main>
+    <PresenceProvider>
+      <CallProvider>
+        <SidebarProvider>
+          <div className="flex min-h-screen w-full">
+            <AppSidebar />
+            <div className="flex-1 flex flex-col">
+              <Header />
+              <main className="flex-1 p-6 bg-muted/20">{children}</main>
+            </div>
           </div>
-        </div>
-      </SidebarProvider>
-    </CallProvider>
+        </SidebarProvider>
+      </CallProvider>
+    </PresenceProvider>
   )
 }

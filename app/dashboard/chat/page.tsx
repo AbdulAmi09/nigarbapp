@@ -2,11 +2,11 @@
 
 import type React from "react"
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import {
   MessageSquare,
   Send,
@@ -25,11 +25,18 @@ import {
   Plus,
   Pause,
   UsersRound,
+  Check,
+  CheckCheck,
+  Reply,
+  Trash2,
+  Info,
 } from "lucide-react"
 import { createBrowserClient } from "@supabase/ssr"
-import { useEffect, useState, useRef } from "react"
+import type { RealtimeChannel } from "@supabase/supabase-js"
+import { useEffect, useState, useRef, useMemo, useCallback } from "react"
 import { useRouter } from "next/navigation"
 import { useCall } from "@/components/call-provider"
+import { useOnlinePresence } from "@/components/presence-provider"
 
 interface ChatRoom {
   id: string
@@ -41,6 +48,9 @@ interface ChatRoom {
   direct_message_with: string | null
   created_by: string | null
   member_count?: number
+  lastMessage?: string
+  lastMessageAt?: string
+  lastMessageType?: string
 }
 
 interface Message {
@@ -55,6 +65,10 @@ interface Message {
   file_url?: string
   file_name?: string
   file_size?: number
+  read_by: string[]
+  reply_to?: string | null
+  reply_preview?: { content: string; message_type: string } | null
+  is_deleted?: boolean
 }
 
 interface OnlineMember {
@@ -62,7 +76,6 @@ interface OnlineMember {
   name: string
   role: string | null
   avatar_url: string | null
-  status: string
 }
 
 interface SearchUser {
@@ -74,15 +87,43 @@ interface SearchUser {
   fide_id: string | null
 }
 
+const MESSAGE_SELECT = `
+  id,
+  content,
+  created_at,
+  sender_id,
+  message_type,
+  file_url,
+  file_name,
+  file_size,
+  read_by,
+  reply_to,
+  is_deleted,
+  profiles:sender_id (
+    first_name,
+    last_name,
+    avatar_url,
+    arbiter_level
+  ),
+  reply_message:reply_to (
+    content,
+    message_type
+  )
+`
+
 export default function ChatPage() {
   const router = useRouter()
   const { startCall } = useCall()
+  const { onlineIds } = useOnlinePresence()
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
   const recordingStartTimeRef = useRef<number>(0)
   const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const lastTypingSentRef = useRef<number>(0)
+  const typingTimeoutsRef = useRef<Record<string, NodeJS.Timeout>>({})
+  const roomChannelRef = useRef<RealtimeChannel | null>(null)
 
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
@@ -92,7 +133,7 @@ export default function ChatPage() {
   const [activeRoom, setActiveRoom] = useState<ChatRoom | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
   const [newMessage, setNewMessage] = useState("")
-  const [onlineMembers, setOnlineMembers] = useState<OnlineMember[]>([])
+  const [roomMembers, setRoomMembers] = useState<OnlineMember[]>([])
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({})
   const [searchRooms, setSearchRooms] = useState("")
   const [showNewMessagesButton, setShowNewMessagesButton] = useState(false)
@@ -110,11 +151,104 @@ export default function ChatPage() {
   const [groupSearchResults, setGroupSearchResults] = useState<SearchUser[]>([])
   const [groupMembers, setGroupMembers] = useState<SearchUser[]>([])
   const [creatingGroup, setCreatingGroup] = useState(false)
+  const [replyingTo, setReplyingTo] = useState<Message | null>(null)
+  const [typingUsers, setTypingUsers] = useState<Record<string, string>>({})
+  const [infoMessage, setInfoMessage] = useState<Message | null>(null)
+  const [readerNames, setReaderNames] = useState<string[]>([])
+  const [otherUserLastSeen, setOtherUserLastSeen] = useState<string | null>(null)
   const chatContainerRef = useRef<HTMLDivElement>(null)
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+  )
+
+  const formatMessage = (msg: any): Message => ({
+    id: msg.id,
+    content: msg.content || "",
+    created_at: msg.created_at,
+    sender_id: msg.sender_id,
+    sender_name: `${msg.profiles?.first_name || ""} ${msg.profiles?.last_name || ""}`.trim() || "Unknown",
+    sender_avatar: msg.profiles?.avatar_url || null,
+    sender_role: msg.profiles?.arbiter_level || null,
+    message_type: msg.message_type || "text",
+    file_url: msg.file_url,
+    file_name: msg.file_name,
+    file_size: msg.file_size,
+    read_by: msg.read_by || [],
+    reply_to: msg.reply_to,
+    reply_preview: msg.reply_message ? { content: msg.reply_message.content, message_type: msg.reply_message.message_type } : null,
+    is_deleted: msg.is_deleted || false,
+  })
+
+  const getOtherUserId = useCallback(
+    (room: ChatRoom, uidOverride?: string | null) => {
+      const uid = uidOverride ?? currentUserId
+      if (!room.is_direct_message || !uid) return null
+      if (room.created_by === uid) return room.direct_message_with
+      return room.created_by
+    },
+    [currentUserId],
+  )
+
+  const refreshRoomsMeta = useCallback(
+    async (rooms: ChatRoom[], userId: string) => {
+      if (rooms.length === 0) return
+
+      const roomIds = rooms.map((r) => r.id)
+
+      const { data: unread } = await supabase.from("unread_messages").select("room_id, unread_count").eq("user_id", userId)
+      const counts: Record<string, number> = {}
+      unread?.forEach((u: any) => {
+        counts[u.room_id] = u.unread_count
+      })
+      setUnreadCounts(counts)
+
+      const { data: recent } = await supabase
+        .from("chat_messages")
+        .select("room_id, content, message_type, created_at, is_deleted")
+        .in("room_id", roomIds)
+        .order("created_at", { ascending: false })
+        .limit(300)
+
+      const lastByRoom: Record<string, any> = {}
+      recent?.forEach((m: any) => {
+        if (!lastByRoom[m.room_id]) lastByRoom[m.room_id] = m
+      })
+
+      const preview = (m: any) => {
+        if (!m) return { text: "No messages yet", at: null }
+        if (m.is_deleted) return { text: "This message was deleted", at: m.created_at }
+        switch (m.message_type) {
+          case "image":
+            return { text: "📷 Photo", at: m.created_at }
+          case "voice":
+            return { text: "🎤 Voice message", at: m.created_at }
+          case "file":
+            return { text: "📎 File", at: m.created_at }
+          default:
+            return { text: m.content, at: m.created_at }
+        }
+      }
+
+      setChatRooms((prev) => {
+        const updated = prev.map((r) => {
+          const p = preview(lastByRoom[r.id])
+          return { ...r, lastMessage: p.text, lastMessageAt: p.at || undefined }
+        })
+        updated.sort((a, b) => new Date(b.lastMessageAt || 0).getTime() - new Date(a.lastMessageAt || 0).getTime())
+        return updated
+      })
+      setFilteredRooms((prev) => {
+        const updated = prev.map((r) => {
+          const p = preview(lastByRoom[r.id])
+          return { ...r, lastMessage: p.text, lastMessageAt: p.at || undefined }
+        })
+        updated.sort((a, b) => new Date(b.lastMessageAt || 0).getTime() - new Date(a.lastMessageAt || 0).getTime())
+        return updated
+      })
+    },
+    [supabase],
   )
 
   useEffect(() => {
@@ -133,7 +267,6 @@ export default function ChatPage() {
       const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).single()
       setIsSuperadmin(profile?.role === "superadmin")
 
-      // Fetch only rooms where user is a member
       const { data: memberRooms } = await supabase
         .from("group_members")
         .select(
@@ -161,11 +294,13 @@ export default function ChatPage() {
 
         setChatRooms(rooms)
         setFilteredRooms(rooms)
+        await refreshRoomsMeta(rooms, user.id)
 
         if (rooms.length > 0) {
           setActiveRoom(rooms[0])
           await fetchMessages(rooms[0].id)
-          await fetchOnlineMembers(rooms[0].id)
+          await fetchRoomMembers(rooms[0])
+          await fetchOtherUserLastSeen(rooms[0], user.id)
           await markRoomAsRead(rooms[0].id, user.id)
         }
       }
@@ -176,8 +311,32 @@ export default function ChatPage() {
     initialize()
   }, [router, supabase])
 
+  // Live signal for chat-list updates: last message + unread count changing
+  // in ANY room, not just the one currently open.
   useEffect(() => {
-    if (!activeRoom) return
+    if (!currentUserId) return
+
+    const channel = supabase
+      .channel(`unread-watch-${currentUserId}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "unread_messages", filter: `user_id=eq.${currentUserId}` },
+        () => {
+          setChatRooms((rooms) => {
+            refreshRoomsMeta(rooms, currentUserId)
+            return rooms
+          })
+        },
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [currentUserId, refreshRoomsMeta])
+
+  useEffect(() => {
+    if (!activeRoom || !currentUserId) return
 
     const channel = supabase
       .channel(`room_${activeRoom.id}`)
@@ -190,56 +349,41 @@ export default function ChatPage() {
           filter: `room_id=eq.${activeRoom.id}`,
         },
         async (payload) => {
-          const { data } = await supabase
-            .from("chat_messages")
-            .select(
-              `
-              id,
-              content,
-              created_at,
-              sender_id,
-              message_type,
-              file_url,
-              file_name,
-              file_size,
-              profiles:sender_id (
-                first_name,
-                last_name,
-                avatar_url,
-                arbiter_level
-              )
-            `,
-            )
-            .eq("id", payload.new.id)
-            .single()
+          const { data } = await supabase.from("chat_messages").select(MESSAGE_SELECT).eq("id", payload.new.id).single()
 
           if (data) {
-            const profile = data.profiles as any
-            const newMsg: Message = {
-              id: data.id,
-              content: data.content || "",
-              created_at: data.created_at,
-              sender_id: data.sender_id,
-              sender_name: `${profile?.first_name || ""} ${profile?.last_name || ""}`.trim() || "Unknown",
-              sender_avatar: profile?.avatar_url || null,
-              sender_role: profile?.arbiter_level || null,
-              message_type: data.message_type || "text",
-              file_url: data.file_url,
-              file_name: data.file_name,
-              file_size: data.file_size,
-            }
+            const newMsg = formatMessage(data)
             setMessages((prev) => [...prev, newMsg])
             setNewMessagesCount((prev) => prev + 1)
             setShowNewMessagesButton(true)
+            if (newMsg.sender_id !== currentUserId) {
+              markRoomAsRead(activeRoom.id, currentUserId)
+            }
           }
         },
       )
+      .on("broadcast", { event: "typing" }, ({ payload }: { payload: { userId: string; name: string } }) => {
+        if (payload.userId === currentUserId) return
+        setTypingUsers((prev) => ({ ...prev, [payload.userId]: payload.name }))
+        if (typingTimeoutsRef.current[payload.userId]) clearTimeout(typingTimeoutsRef.current[payload.userId])
+        typingTimeoutsRef.current[payload.userId] = setTimeout(() => {
+          setTypingUsers((prev) => {
+            const next = { ...prev }
+            delete next[payload.userId]
+            return next
+          })
+        }, 3000)
+      })
       .subscribe()
 
+    roomChannelRef.current = channel
+
     return () => {
+      roomChannelRef.current = null
       supabase.removeChannel(channel)
+      setTypingUsers({})
     }
-  }, [activeRoom, supabase])
+  }, [activeRoom, currentUserId, supabase])
 
   const handleChatScroll = () => {
     if (!chatContainerRef.current) return
@@ -257,48 +401,28 @@ export default function ChatPage() {
   async function fetchMessages(roomId: string) {
     const { data } = await supabase
       .from("chat_messages")
-      .select(
-        `
-        id,
-        content,
-        created_at,
-        sender_id,
-        message_type,
-        file_url,
-        file_name,
-        file_size,
-        profiles:sender_id (
-          first_name,
-          last_name,
-          avatar_url,
-          arbiter_level
-        )
-      `,
-      )
+      .select(MESSAGE_SELECT)
       .eq("room_id", roomId)
       .order("created_at", { ascending: true })
       .limit(50)
 
     if (data) {
-      const formattedMessages: Message[] = data.map((msg: any) => ({
-        id: msg.id,
-        content: msg.content || "",
-        created_at: msg.created_at,
-        sender_id: msg.sender_id,
-        sender_name: `${msg.profiles?.first_name || ""} ${msg.profiles?.last_name || ""}`.trim() || "Unknown",
-        sender_avatar: msg.profiles?.avatar_url || null,
-        sender_role: msg.profiles?.arbiter_level || null,
-        message_type: msg.message_type || "text",
-        file_url: msg.file_url,
-        file_name: msg.file_name,
-        file_size: msg.file_size,
-      }))
-      setMessages(formattedMessages)
+      setMessages(data.map(formatMessage))
       setTimeout(() => scrollToBottom(), 100)
     }
   }
 
-  async function fetchOnlineMembers(roomId: string) {
+  async function fetchOtherUserLastSeen(room: ChatRoom, uidOverride?: string | null) {
+    const otherId = getOtherUserId(room, uidOverride)
+    if (!otherId) {
+      setOtherUserLastSeen(null)
+      return
+    }
+    const { data } = await supabase.from("profiles").select("last_seen_at").eq("id", otherId).single()
+    setOtherUserLastSeen(data?.last_seen_at || null)
+  }
+
+  async function fetchRoomMembers(room: ChatRoom) {
     const { data } = await supabase
       .from("group_members")
       .select(
@@ -312,8 +436,8 @@ export default function ChatPage() {
         )
       `,
       )
-      .eq("group_id", roomId)
-      .limit(10)
+      .eq("group_id", room.id)
+      .limit(50)
 
     if (data) {
       const members: OnlineMember[] = data.map((member: any) => ({
@@ -321,9 +445,8 @@ export default function ChatPage() {
         name: `${member.profiles?.first_name || ""} ${member.profiles?.last_name || ""}`.trim() || "Unknown",
         role: member.profiles?.arbiter_level || null,
         avatar_url: member.profiles?.avatar_url || null,
-        status: Math.random() > 0.5 ? "online" : "away",
       }))
-      setOnlineMembers(members)
+      setRoomMembers(members)
     }
   }
 
@@ -390,7 +513,6 @@ export default function ChatPage() {
       mediaRecorder.start()
       setIsRecording(true)
 
-      // Update recording duration
       recordingIntervalRef.current = setInterval(() => {
         const duration = Math.floor((Date.now() - recordingStartTimeRef.current) / 1000)
         setRecordingDuration(duration)
@@ -403,12 +525,6 @@ export default function ChatPage() {
   const pauseRecording = () => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
       mediaRecorderRef.current.pause()
-    }
-  }
-
-  const resumeRecording = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === "paused") {
-      mediaRecorderRef.current.resume()
     }
   }
 
@@ -483,7 +599,6 @@ export default function ChatPage() {
       })
 
       if (roomId) {
-        // Fetch the new room data
         const { data: newRoom } = await supabase.from("chat_rooms").select("*").eq("id", roomId).single()
 
         if (newRoom) {
@@ -491,11 +606,12 @@ export default function ChatPage() {
             ...newRoom,
             member_count: 2,
           }
-          setChatRooms((prev) => [room, ...prev])
-          setFilteredRooms((prev) => [room, ...prev])
+          setChatRooms((prev) => (prev.some((r) => r.id === room.id) ? prev : [room, ...prev]))
+          setFilteredRooms((prev) => (prev.some((r) => r.id === room.id) ? prev : [room, ...prev]))
           setActiveRoom(room)
           await fetchMessages(room.id)
-          await fetchOnlineMembers(room.id)
+          await fetchRoomMembers(room)
+          await fetchOtherUserLastSeen(room)
           await markRoomAsRead(room.id, currentUserId)
         }
       }
@@ -564,7 +680,7 @@ export default function ChatPage() {
       setFilteredRooms((prev) => [newRoom, ...prev])
       setActiveRoom(newRoom)
       await fetchMessages(newRoom.id)
-      await fetchOnlineMembers(newRoom.id)
+      await fetchRoomMembers(newRoom)
 
       setShowCreateGroup(false)
       setGroupName("")
@@ -590,11 +706,13 @@ export default function ChatPage() {
         sender_id: currentUserId,
         content: newMessage.trim(),
         message_type: "text",
+        reply_to: replyingTo?.id || null,
       })
 
       if (error) throw error
 
       setNewMessage("")
+      setReplyingTo(null)
     } catch (error) {
       console.error("[v0] Error sending message:", error)
     } finally {
@@ -602,12 +720,47 @@ export default function ChatPage() {
     }
   }
 
+  const handleTyping = (value: string) => {
+    setNewMessage(value)
+    if (!activeRoom || !currentUserId || !roomChannelRef.current) return
+
+    const now = Date.now()
+    if (now - lastTypingSentRef.current < 2000) return
+    lastTypingSentRef.current = now
+
+    const myName = roomMembers.find((m) => m.id === currentUserId)?.name || "Someone"
+    roomChannelRef.current.send({ type: "broadcast", event: "typing", payload: { userId: currentUserId, name: myName } })
+  }
+
+  const handleDeleteMessage = async (messageId: string) => {
+    await supabase
+      .from("chat_messages")
+      .update({ is_deleted: true, content: "", file_url: null })
+      .eq("id", messageId)
+      .eq("sender_id", currentUserId)
+
+    setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, is_deleted: true, content: "" } : m)))
+  }
+
+  const openMessageInfo = async (message: Message) => {
+    setInfoMessage(message)
+    const otherReaders = message.read_by.filter((id) => id !== message.sender_id)
+    if (otherReaders.length === 0) {
+      setReaderNames([])
+      return
+    }
+    const { data } = await supabase.from("profiles").select("id, first_name, last_name").in("id", otherReaders)
+    setReaderNames((data || []).map((p: any) => `${p.first_name || ""} ${p.last_name || ""}`.trim() || "Unknown"))
+  }
+
   async function handleRoomChange(room: ChatRoom) {
     setActiveRoom(room)
     setShowNewMessagesButton(false)
     setNewMessagesCount(0)
+    setReplyingTo(null)
     await fetchMessages(room.id)
-    await fetchOnlineMembers(room.id)
+    await fetchRoomMembers(room)
+    await fetchOtherUserLastSeen(room)
     if (currentUserId) {
       await markRoomAsRead(room.id, currentUserId)
     }
@@ -630,12 +783,6 @@ export default function ChatPage() {
       const filtered = chatRooms.filter((room) => room.name.toLowerCase().includes(searchTerm.toLowerCase()))
       setFilteredRooms(filtered)
     }
-  }
-
-  const getOtherUserId = (room: ChatRoom) => {
-    if (!room.is_direct_message || !currentUserId) return null
-    if (room.created_by === currentUserId) return room.direct_message_with
-    return room.created_by
   }
 
   const getRoomTypeColor = (type: string) => {
@@ -678,6 +825,45 @@ export default function ChatPage() {
     return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`
   }
 
+  const formatLastSeen = (dateString: string | null) => {
+    if (!dateString) return null
+    const diffMs = Date.now() - new Date(dateString).getTime()
+    const mins = Math.floor(diffMs / 60000)
+    if (mins < 1) return "last seen just now"
+    if (mins < 60) return `last seen ${mins}m ago`
+    const hours = Math.floor(mins / 60)
+    if (hours < 24) return `last seen ${hours}h ago`
+    return `last seen ${new Date(dateString).toLocaleDateString()}`
+  }
+
+  const dayLabel = (dateString: string) => {
+    const date = new Date(dateString)
+    const today = new Date()
+    const yesterday = new Date(today)
+    yesterday.setDate(yesterday.getDate() - 1)
+    if (date.toDateString() === today.toDateString()) return "Today"
+    if (date.toDateString() === yesterday.toDateString()) return "Yesterday"
+    return date.toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" })
+  }
+
+  const groupedMessages = useMemo(() => {
+    const groups: { date: string; items: Message[] }[] = []
+    for (const msg of messages) {
+      const label = dayLabel(msg.created_at)
+      const last = groups[groups.length - 1]
+      if (last && last.date === label) {
+        last.items.push(msg)
+      } else {
+        groups.push({ date: label, items: [msg] })
+      }
+    }
+    return groups
+  }, [messages])
+
+  const activeRoomOtherUserId = activeRoom ? getOtherUserId(activeRoom) : null
+  const activeRoomOnline = activeRoomOtherUserId ? onlineIds.has(activeRoomOtherUserId) : false
+  const typingNames = Object.values(typingUsers)
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-96">
@@ -687,273 +873,208 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold text-balance">Chat Room</h1>
-        <p className="text-muted-foreground text-pretty">
-          Connect and communicate with fellow arbiters across different zones and committees.
-        </p>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 h-[calc(100vh-200px)]">
+    <div className="flex flex-col h-[calc(100vh-4rem)] -m-6 overflow-hidden">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-px flex-1 min-h-0 bg-border">
         {/* Chat Rooms Sidebar */}
-        <div className="lg:col-span-1">
-          <Card className="h-full flex flex-col overflow-hidden">
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-lg">Chat Rooms</CardTitle>
-                <div className="flex items-center">
-                  {isSuperadmin && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => setShowCreateGroup(!showCreateGroup)}
-                      title="Create group"
-                    >
-                      <UsersRound className="w-4 h-4" />
-                    </Button>
-                  )}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => setShowDMSearch(!showDMSearch)}
-                    title="Start direct message"
-                  >
-                    <Plus className="w-4 h-4" />
+        <div className="lg:col-span-1 bg-background flex flex-col min-h-0">
+          <div className="p-3 border-b space-y-3 shrink-0">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Chats</h2>
+              <div className="flex items-center">
+                {isSuperadmin && (
+                  <Button variant="ghost" size="icon" onClick={() => setShowCreateGroup(!showCreateGroup)} title="Create group">
+                    <UsersRound className="w-4 h-4" />
                   </Button>
-                </div>
-              </div>
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
-                <Input
-                  placeholder="Search rooms..."
-                  className="pl-10"
-                  value={searchRooms}
-                  onChange={(e) => handleSearchRooms(e.target.value)}
-                />
-              </div>
-            </CardHeader>
-
-            {showDMSearch && (
-              <div className="p-3 border-b bg-muted/50">
-                <div className="flex items-center gap-2 mb-2">
-                  <Input
-                    placeholder="Search by FIDE ID..."
-                    value={dmSearchQuery}
-                    onChange={(e) => searchUsersForDM(e.target.value)}
-                    className="flex-1"
-                  />
-                  <Button variant="ghost" size="icon" onClick={() => setShowDMSearch(false)}>
-                    <X className="w-4 h-4" />
-                  </Button>
-                </div>
-                {dmSearchQuery.trim() && dmSearchResults.length === 0 && (
-                  <p className="text-xs text-muted-foreground px-2">No arbiter found with that FIDE ID.</p>
                 )}
-                {dmSearchResults.length > 0 && (
-                  <div className="space-y-1 max-h-40 overflow-y-auto">
-                    {dmSearchResults.map((user) => (
-                      <button
-                        key={user.id}
-                        onClick={() => createDirectMessage(user.id)}
-                        className="w-full flex items-center gap-2 p-2 rounded hover:bg-muted/70 text-left"
-                      >
-                        <Avatar className="w-6 h-6">
-                          <AvatarImage src={user.avatar_url || ""} alt={user.name} />
-                          <AvatarFallback>{user.name[0]}</AvatarFallback>
-                        </Avatar>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium truncate">{user.name}</p>
-                          <p className="text-xs text-muted-foreground truncate">FIDE ID: {user.fide_id}</p>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {showCreateGroup && (
-              <div className="p-3 border-b bg-muted/50 space-y-2">
-                <div className="flex items-center gap-2">
-                  <Input
-                    placeholder="Group name..."
-                    value={groupName}
-                    onChange={(e) => setGroupName(e.target.value)}
-                    className="flex-1"
-                  />
-                  <Button variant="ghost" size="icon" onClick={() => setShowCreateGroup(false)}>
-                    <X className="w-4 h-4" />
-                  </Button>
-                </div>
-
-                {groupMembers.length > 0 && (
-                  <div className="flex flex-wrap gap-1">
-                    {groupMembers.map((m) => (
-                      <Badge key={m.id} variant="secondary" className="gap-1">
-                        {m.name}
-                        <button onClick={() => removeGroupMember(m.id)}>
-                          <X className="w-3 h-3" />
-                        </button>
-                      </Badge>
-                    ))}
-                  </div>
-                )}
-
-                <Input
-                  placeholder="Add members by FIDE ID..."
-                  value={groupSearchQuery}
-                  onChange={(e) => searchUsersForGroup(e.target.value)}
-                />
-                {groupSearchResults.length > 0 && (
-                  <div className="space-y-1 max-h-32 overflow-y-auto">
-                    {groupSearchResults.map((user) => (
-                      <button
-                        key={user.id}
-                        onClick={() => addGroupMember(user)}
-                        className="w-full flex items-center gap-2 p-2 rounded hover:bg-muted/70 text-left"
-                      >
-                        <Avatar className="w-6 h-6">
-                          <AvatarImage src={user.avatar_url || ""} alt={user.name} />
-                          <AvatarFallback>{user.name[0]}</AvatarFallback>
-                        </Avatar>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium truncate">{user.name}</p>
-                          <p className="text-xs text-muted-foreground truncate">FIDE ID: {user.fide_id}</p>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                )}
-
-                <Button
-                  size="sm"
-                  className="w-full"
-                  onClick={handleCreateGroup}
-                  disabled={creatingGroup || !groupName.trim() || groupMembers.length === 0}
-                >
-                  {creatingGroup && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                  Create Group
+                <Button variant="ghost" size="icon" onClick={() => setShowDMSearch(!showDMSearch)} title="Start direct message">
+                  <Plus className="w-4 h-4" />
                 </Button>
               </div>
-            )}
+            </div>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
+              <Input placeholder="Search chats..." className="pl-10" value={searchRooms} onChange={(e) => handleSearchRooms(e.target.value)} />
+            </div>
+          </div>
 
-            <CardContent className="flex-1 overflow-y-auto p-0">
-              <div className="space-y-1">
-                {filteredRooms.map((room) => (
+          {showDMSearch && (
+            <div className="p-3 border-b bg-muted/50 shrink-0">
+              <div className="flex items-center gap-2 mb-2">
+                <Input placeholder="Search by FIDE ID..." value={dmSearchQuery} onChange={(e) => searchUsersForDM(e.target.value)} className="flex-1" />
+                <Button variant="ghost" size="icon" onClick={() => setShowDMSearch(false)}>
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
+              {dmSearchQuery.trim() && dmSearchResults.length === 0 && (
+                <p className="text-xs text-muted-foreground px-2">No arbiter found with that FIDE ID.</p>
+              )}
+              {dmSearchResults.length > 0 && (
+                <div className="space-y-1 max-h-40 overflow-y-auto">
+                  {dmSearchResults.map((user) => (
+                    <button key={user.id} onClick={() => createDirectMessage(user.id)} className="w-full flex items-center gap-2 p-2 rounded hover:bg-muted/70 text-left">
+                      <Avatar className="w-6 h-6">
+                        <AvatarImage src={user.avatar_url || ""} alt={user.name} />
+                        <AvatarFallback>{user.name[0]}</AvatarFallback>
+                      </Avatar>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{user.name}</p>
+                        <p className="text-xs text-muted-foreground truncate">FIDE ID: {user.fide_id}</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {showCreateGroup && (
+            <div className="p-3 border-b bg-muted/50 space-y-2 shrink-0">
+              <div className="flex items-center gap-2">
+                <Input placeholder="Group name..." value={groupName} onChange={(e) => setGroupName(e.target.value)} className="flex-1" />
+                <Button variant="ghost" size="icon" onClick={() => setShowCreateGroup(false)}>
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
+
+              {groupMembers.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {groupMembers.map((m) => (
+                    <Badge key={m.id} variant="secondary" className="gap-1">
+                      {m.name}
+                      <button onClick={() => removeGroupMember(m.id)}>
+                        <X className="w-3 h-3" />
+                      </button>
+                    </Badge>
+                  ))}
+                </div>
+              )}
+
+              <Input placeholder="Add members by FIDE ID..." value={groupSearchQuery} onChange={(e) => searchUsersForGroup(e.target.value)} />
+              {groupSearchResults.length > 0 && (
+                <div className="space-y-1 max-h-32 overflow-y-auto">
+                  {groupSearchResults.map((user) => (
+                    <button key={user.id} onClick={() => addGroupMember(user)} className="w-full flex items-center gap-2 p-2 rounded hover:bg-muted/70 text-left">
+                      <Avatar className="w-6 h-6">
+                        <AvatarImage src={user.avatar_url || ""} alt={user.name} />
+                        <AvatarFallback>{user.name[0]}</AvatarFallback>
+                      </Avatar>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{user.name}</p>
+                        <p className="text-xs text-muted-foreground truncate">FIDE ID: {user.fide_id}</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              <Button size="sm" className="w-full" onClick={handleCreateGroup} disabled={creatingGroup || !groupName.trim() || groupMembers.length === 0}>
+                {creatingGroup && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                Create Group
+              </Button>
+            </div>
+          )}
+
+          <div className="flex-1 overflow-y-auto min-h-0">
+            <div className="space-y-1 p-2">
+              {filteredRooms.map((room) => {
+                const otherId = getOtherUserId(room)
+                const online = otherId ? onlineIds.has(otherId) : false
+                return (
                   <div
                     key={room.id}
                     onClick={() => handleRoomChange(room)}
-                    className={`flex items-center gap-3 p-3 mx-3 rounded-lg cursor-pointer hover:bg-muted/50 ${
-                      activeRoom?.id === room.id ? "bg-primary/10" : ""
-                    }`}
+                    className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer hover:bg-muted/50 ${activeRoom?.id === room.id ? "bg-primary/10" : ""}`}
                   >
-                    {room.logo_url ? (
-                      <img
-                        src={room.logo_url || "/placeholder.svg"}
-                        alt={room.name}
-                        className="w-10 h-10 rounded-lg object-cover"
-                      />
-                    ) : (
-                      <div
-                        className={`w-10 h-10 rounded-lg flex items-center justify-center ${getRoomTypeColor(room.room_type)}`}
-                      >
-                        {room.is_direct_message ? <MessageSquare className="w-5 h-5" /> : <Hash className="w-5 h-5" />}
-                      </div>
-                    )}
+                    <div className="relative shrink-0">
+                      {room.logo_url ? (
+                        <img src={room.logo_url || "/placeholder.svg"} alt={room.name} className="w-11 h-11 rounded-full object-cover" />
+                      ) : (
+                        <div className={`w-11 h-11 rounded-full flex items-center justify-center ${getRoomTypeColor(room.room_type)}`}>
+                          {room.is_direct_message ? <MessageSquare className="w-5 h-5" /> : <Hash className="w-5 h-5" />}
+                        </div>
+                      )}
+                      {room.is_direct_message && online && (
+                        <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-green-500 border-2 border-background" />
+                      )}
+                    </div>
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between gap-2">
                         <p className="font-medium truncate">{room.name}</p>
+                        {room.lastMessageAt && <span className="text-xs text-muted-foreground shrink-0">{formatTime(room.lastMessageAt)}</span>}
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-xs text-muted-foreground truncate">{room.lastMessage || room.description || "No messages yet"}</p>
                         {unreadCounts[room.id] > 0 && (
-                          <Badge variant="destructive" className="text-xs">
+                          <Badge variant="destructive" className="text-xs shrink-0">
                             {unreadCounts[room.id]}
                           </Badge>
                         )}
                       </div>
-                      <p className="text-xs text-muted-foreground truncate">{room.description || "No description"}</p>
                     </div>
                   </div>
-                ))}
-                {filteredRooms.length === 0 && (
-                  <p className="text-center text-muted-foreground py-4">No chat rooms found</p>
-                )}
-              </div>
-            </CardContent>
-          </Card>
+                )
+              })}
+              {filteredRooms.length === 0 && <p className="text-center text-muted-foreground py-4">No chat rooms found</p>}
+            </div>
+          </div>
         </div>
 
         {/* Main Chat Area */}
-        <div className="lg:col-span-2">
-          <Card className="h-full flex flex-col overflow-hidden">
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  {activeRoom?.logo_url ? (
-                    <img
-                      src={activeRoom.logo_url || "/placeholder.svg"}
-                      alt={activeRoom.name}
-                      className="w-10 h-10 rounded-lg object-cover"
-                    />
-                  ) : (
-                    <div className="w-10 h-10 bg-primary/10 rounded-lg flex items-center justify-center">
-                      {activeRoom?.is_direct_message ? (
-                        <MessageSquare className="w-5 h-5 text-primary" />
-                      ) : (
-                        <Hash className="w-5 h-5 text-primary" />
-                      )}
-                    </div>
-                  )}
-                  <div>
-                    <h3 className="font-semibold">{activeRoom?.name || "Select a room"}</h3>
-                    <p className="text-sm text-muted-foreground">{onlineMembers.length} members</p>
-                  </div>
+        <div className="lg:col-span-2 bg-background flex flex-col min-h-0">
+          <div className="p-3 border-b flex items-center justify-between shrink-0">
+            <div className="flex items-center gap-3 min-w-0">
+              {activeRoom?.logo_url ? (
+                <img src={activeRoom.logo_url || "/placeholder.svg"} alt={activeRoom.name} className="w-10 h-10 rounded-full object-cover" />
+              ) : (
+                <div className="w-10 h-10 bg-primary/10 rounded-full flex items-center justify-center shrink-0">
+                  {activeRoom?.is_direct_message ? <MessageSquare className="w-5 h-5 text-primary" /> : <Hash className="w-5 h-5 text-primary" />}
                 </div>
-                <div className="flex items-center gap-2">
-                  {activeRoom && getOtherUserId(activeRoom) && (
-                    <>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => {
-                          const otherId = getOtherUserId(activeRoom)
-                          if (otherId) startCall(otherId, activeRoom.id, "voice")
-                        }}
-                        title="Voice call"
-                      >
-                        <Phone className="w-4 h-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => {
-                          const otherId = getOtherUserId(activeRoom)
-                          if (otherId) startCall(otherId, activeRoom.id, "video")
-                        }}
-                        title="Video call"
-                      >
-                        <Video className="w-4 h-4" />
-                      </Button>
-                    </>
-                  )}
-                  <Button variant="ghost" size="icon">
-                    <MoreVertical className="w-4 h-4" />
-                  </Button>
-                </div>
+              )}
+              <div className="min-w-0">
+                <h3 className="font-semibold truncate">{activeRoom?.name || "Select a room"}</h3>
+                <p className="text-xs text-muted-foreground truncate">
+                  {typingNames.length > 0
+                    ? `${typingNames.join(", ")} typing...`
+                    : activeRoom?.is_direct_message
+                      ? activeRoomOnline
+                        ? "online"
+                        : formatLastSeen(otherUserLastSeen) || "offline"
+                      : `${roomMembers.length} members`}
+                </p>
               </div>
-            </CardHeader>
+            </div>
+            <div className="flex items-center gap-1 shrink-0">
+              {activeRoom && activeRoomOtherUserId && (
+                <>
+                  <Button variant="ghost" size="icon" onClick={() => activeRoomOtherUserId && startCall(activeRoomOtherUserId, activeRoom.id, "voice")} title="Voice call">
+                    <Phone className="w-4 h-4" />
+                  </Button>
+                  <Button variant="ghost" size="icon" onClick={() => activeRoomOtherUserId && startCall(activeRoomOtherUserId, activeRoom.id, "video")} title="Video call">
+                    <Video className="w-4 h-4" />
+                  </Button>
+                </>
+              )}
+              <Button variant="ghost" size="icon">
+                <MoreVertical className="w-4 h-4" />
+              </Button>
+            </div>
+          </div>
 
-            <CardContent className="flex-1 flex flex-col p-0 overflow-hidden">
-              {/* Messages Container - Proper scroll containment */}
-              <div
-                ref={chatContainerRef}
-                onScroll={handleChatScroll}
-                className="flex-1 overflow-y-auto p-4 space-y-4 relative"
-              >
-                {messages.map((message) => {
+          <div ref={chatContainerRef} onScroll={handleChatScroll} className="flex-1 overflow-y-auto p-4 space-y-1 relative min-h-0">
+            {groupedMessages.map((group) => (
+              <div key={group.date}>
+                <div className="flex justify-center my-3">
+                  <span className="text-xs bg-muted text-muted-foreground px-3 py-1 rounded-full">{group.date}</span>
+                </div>
+                {group.items.map((message) => {
                   const isOwn = message.sender_id === currentUserId
+                  const isRead = activeRoom?.is_direct_message
+                    ? !!(activeRoomOtherUserId && message.read_by.includes(activeRoomOtherUserId))
+                    : message.read_by.some((id) => id !== message.sender_id)
+
                   return (
-                    <div key={message.id} className={`flex gap-3 ${isOwn ? "flex-row-reverse" : ""}`}>
-                      <Avatar className="w-8 h-8">
+                    <div key={message.id} className={`group flex gap-3 py-1.5 ${isOwn ? "flex-row-reverse" : ""}`}>
+                      <Avatar className="w-8 h-8 shrink-0">
                         <AvatarImage src={message.sender_avatar || ""} alt={message.sender_name} />
                         <AvatarFallback>
                           {message.sender_name
@@ -968,200 +1089,212 @@ export default function ChatPage() {
                           <Badge variant="outline" className="text-xs">
                             {getArbiterTitle(message.sender_role)}
                           </Badge>
-                          <p className="text-xs text-muted-foreground">{formatTime(message.created_at)}</p>
                         </div>
-                        <div className={`${isOwn ? "ml-auto" : ""}`}>
-                          {message.message_type === "text" && (
-                            <div
-                              className={`p-3 rounded-lg ${isOwn ? "bg-primary text-primary-foreground" : "bg-muted"}`}
-                            >
-                              <p className="text-sm">{message.content}</p>
-                            </div>
-                          )}
-                          {message.message_type === "image" && message.file_url && (
-                            <div className={`rounded-lg overflow-hidden ${isOwn ? "ml-auto" : ""}`}>
-                              <img
-                                src={message.file_url || "/placeholder.svg"}
-                                alt={message.file_name}
-                                className="max-w-xs h-auto"
-                              />
-                            </div>
-                          )}
-                          {message.message_type === "file" && message.file_url && (
-                            <a
-                              href={message.file_url}
-                              download
-                              className={`p-3 rounded-lg flex items-center gap-2 ${isOwn ? "bg-primary text-primary-foreground" : "bg-muted"}`}
-                            >
-                              <FileUp className="w-4 h-4" />
-                              <span className="text-sm truncate">{message.file_name}</span>
-                              <Download className="w-4 h-4" />
-                            </a>
-                          )}
-                          {message.message_type === "voice" && message.file_url && (
-                            <div
-                              className={`p-3 rounded-lg ${isOwn ? "bg-primary text-primary-foreground" : "bg-muted"}`}
-                            >
-                              <audio controls className="w-full max-w-xs h-8">
-                                <source src={message.file_url} type="audio/webm" />
-                              </audio>
-                            </div>
+
+                        {message.reply_preview && (
+                          <div className={`text-xs border-l-2 border-primary/50 pl-2 mb-1 text-muted-foreground truncate ${isOwn ? "ml-auto" : ""}`}>
+                            {message.reply_preview.message_type === "text" ? message.reply_preview.content : `[${message.reply_preview.message_type}]`}
+                          </div>
+                        )}
+
+                        <div className={`inline-flex items-end gap-1 ${isOwn ? "flex-row-reverse" : ""}`}>
+                          <div className={isOwn ? "ml-auto" : ""}>
+                            {message.is_deleted ? (
+                              <div className="p-3 rounded-lg bg-muted italic text-sm text-muted-foreground">This message was deleted</div>
+                            ) : (
+                              <>
+                                {message.message_type === "text" && (
+                                  <div className={`p-3 rounded-lg ${isOwn ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
+                                    <p className="text-sm text-left">{message.content}</p>
+                                  </div>
+                                )}
+                                {message.message_type === "image" && message.file_url && (
+                                  <div className="rounded-lg overflow-hidden">
+                                    <img src={message.file_url || "/placeholder.svg"} alt={message.file_name} className="max-w-xs h-auto" />
+                                  </div>
+                                )}
+                                {message.message_type === "file" && message.file_url && (
+                                  <a href={message.file_url} download className={`p-3 rounded-lg flex items-center gap-2 ${isOwn ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
+                                    <FileUp className="w-4 h-4" />
+                                    <span className="text-sm truncate">{message.file_name}</span>
+                                    <Download className="w-4 h-4" />
+                                  </a>
+                                )}
+                                {message.message_type === "voice" && message.file_url && (
+                                  <div className={`p-3 rounded-lg ${isOwn ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
+                                    <audio controls className="w-full max-w-xs h-8">
+                                      <source src={message.file_url} type="audio/webm" />
+                                    </audio>
+                                  </div>
+                                )}
+                              </>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                            {!message.is_deleted && (
+                              <Button variant="ghost" size="icon" className="w-6 h-6" onClick={() => setReplyingTo(message)} title="Reply">
+                                <Reply className="w-3.5 h-3.5" />
+                              </Button>
+                            )}
+                            {isOwn && (
+                              <Button variant="ghost" size="icon" className="w-6 h-6" onClick={() => openMessageInfo(message)} title="Info">
+                                <Info className="w-3.5 h-3.5" />
+                              </Button>
+                            )}
+                            {isOwn && !message.is_deleted && (
+                              <Button variant="ghost" size="icon" className="w-6 h-6" onClick={() => handleDeleteMessage(message.id)} title="Delete">
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className={`flex items-center gap-1 mt-0.5 ${isOwn ? "justify-end" : ""}`}>
+                          <span className="text-xs text-muted-foreground">{formatTime(message.created_at)}</span>
+                          {isOwn && !message.is_deleted && (
+                            isRead ? (
+                              <CheckCheck className="w-3.5 h-3.5 text-blue-500" />
+                            ) : (
+                              <Check className="w-3.5 h-3.5 text-muted-foreground" />
+                            )
                           )}
                         </div>
                       </div>
                     </div>
                   )
                 })}
-                {messages.length === 0 && (
-                  <p className="text-center text-muted-foreground py-8">No messages yet. Start the conversation!</p>
-                )}
-                <div ref={messagesEndRef} />
               </div>
+            ))}
+            {messages.length === 0 && <p className="text-center text-muted-foreground py-8">No messages yet. Start the conversation!</p>}
+            <div ref={messagesEndRef} />
+          </div>
 
-              {/* Scroll to Bottom Button */}
-              {showNewMessagesButton && (
-                <button
-                  onClick={scrollToBottom}
-                  className="absolute bottom-24 right-8 bg-primary text-primary-foreground rounded-full p-2 shadow-lg hover:bg-primary/90 flex items-center gap-2"
-                >
-                  <ChevronDown className="w-5 h-5" />
-                  <span className="text-sm font-medium">{newMessagesCount}</span>
-                </button>
-              )}
+          {showNewMessagesButton && (
+            <button onClick={scrollToBottom} className="absolute bottom-24 right-8 bg-primary text-primary-foreground rounded-full p-2 shadow-lg hover:bg-primary/90 flex items-center gap-2">
+              <ChevronDown className="w-5 h-5" />
+              <span className="text-sm font-medium">{newMessagesCount}</span>
+            </button>
+          )}
 
-              {isRecording && (
-                <div className="px-4 py-3 bg-red-500/10 border-t border-red-200 flex items-center gap-3">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
-                      <span className="text-sm font-medium text-red-600">Recording...</span>
-                      <span className="text-sm text-red-600 ml-auto">{formatDuration(recordingDuration)}</span>
-                    </div>
-                    <div className="mt-2 h-6 bg-red-200/50 rounded flex items-center overflow-hidden">
-                      {Array.from({ length: 20 }).map((_, i) => (
-                        <div
-                          key={i}
-                          className="flex-1 h-full bg-red-500 mx-0.5"
-                          style={{
-                            opacity: Math.random() * 0.5 + 0.5,
-                            animation: `pulse 0.3s ease-in-out ${i * 0.05}s infinite`,
-                          }}
-                        ></div>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button size="sm" variant="destructive" onClick={cancelRecording}>
-                      <X className="w-4 h-4" />
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={pauseRecording}>
-                      <Pause className="w-4 h-4" />
-                    </Button>
-                    <Button size="sm" onClick={stopRecording}>
-                      <Send className="w-4 h-4" />
-                    </Button>
-                  </div>
+          {isRecording && (
+            <div className="px-4 py-3 bg-red-500/10 border-t border-red-200 flex items-center gap-3 shrink-0">
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
+                  <span className="text-sm font-medium text-red-600">Recording...</span>
+                  <span className="text-sm text-red-600 ml-auto">{formatDuration(recordingDuration)}</span>
                 </div>
-              )}
+              </div>
+              <div className="flex gap-2">
+                <Button size="sm" variant="destructive" onClick={cancelRecording}>
+                  <X className="w-4 h-4" />
+                </Button>
+                <Button size="sm" variant="outline" onClick={pauseRecording}>
+                  <Pause className="w-4 h-4" />
+                </Button>
+                <Button size="sm" onClick={stopRecording}>
+                  <Send className="w-4 h-4" />
+                </Button>
+              </div>
+            </div>
+          )}
 
-              {/* Message Input */}
-              <form onSubmit={handleSendMessage} className="p-4 border-t">
-                <div className="flex gap-2 items-end">
-                  <Input
-                    placeholder="Type your message..."
-                    className="flex-1"
-                    value={newMessage}
-                    onChange={(e) => setNewMessage(e.target.value)}
-                    disabled={sending || !activeRoom || isRecording}
-                  />
-                  <input ref={fileInputRef} type="file" onChange={handleFileUpload} className="hidden" />
-                  <Button
-                    type="button"
-                    size="icon"
-                    variant="ghost"
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={uploadingFile || !activeRoom || isRecording}
-                  >
-                    {uploadingFile ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileUp className="w-4 h-4" />}
-                  </Button>
-                  <Button
-                    type="button"
-                    size="icon"
-                    variant="ghost"
-                    onClick={isRecording ? stopRecording : startRecording}
-                    disabled={!activeRoom}
-                    className={isRecording ? "bg-red-500/10 text-red-600" : ""}
-                  >
-                    <Mic className="w-4 h-4" />
-                  </Button>
-                  <Button
-                    type="submit"
-                    size="icon"
-                    disabled={sending || !newMessage.trim() || !activeRoom || isRecording}
-                  >
-                    <Send className="w-4 h-4" />
-                  </Button>
-                </div>
-              </form>
-            </CardContent>
-          </Card>
+          {replyingTo && (
+            <div className="px-4 py-2 border-t bg-muted/50 flex items-center justify-between shrink-0">
+              <div className="text-xs text-muted-foreground truncate">
+                Replying to <span className="font-medium">{replyingTo.sender_name}</span>: {replyingTo.message_type === "text" ? replyingTo.content : `[${replyingTo.message_type}]`}
+              </div>
+              <Button variant="ghost" size="icon" className="w-6 h-6 shrink-0" onClick={() => setReplyingTo(null)}>
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+          )}
+
+          <form onSubmit={handleSendMessage} className="p-4 border-t shrink-0">
+            <div className="flex gap-2 items-end">
+              <Input
+                placeholder="Type your message..."
+                className="flex-1"
+                value={newMessage}
+                onChange={(e) => handleTyping(e.target.value)}
+                disabled={sending || !activeRoom || isRecording}
+              />
+              <input ref={fileInputRef} type="file" onChange={handleFileUpload} className="hidden" />
+              <Button type="button" size="icon" variant="ghost" onClick={() => fileInputRef.current?.click()} disabled={uploadingFile || !activeRoom || isRecording}>
+                {uploadingFile ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileUp className="w-4 h-4" />}
+              </Button>
+              <Button type="button" size="icon" variant="ghost" onClick={isRecording ? stopRecording : startRecording} disabled={!activeRoom} className={isRecording ? "bg-red-500/10 text-red-600" : ""}>
+                <Mic className="w-4 h-4" />
+              </Button>
+              <Button type="submit" size="icon" disabled={sending || !newMessage.trim() || !activeRoom || isRecording}>
+                <Send className="w-4 h-4" />
+              </Button>
+            </div>
+          </form>
         </div>
 
         {/* Members Sidebar */}
-        <div className="lg:col-span-1">
-          <Card className="h-full flex flex-col overflow-hidden">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-lg">Online Members</CardTitle>
-              <CardDescription>
-                {onlineMembers.filter((m) => m.status === "online").length} of {onlineMembers.length} members online
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex-1 space-y-3 overflow-y-auto">
-              {onlineMembers.map((member) => (
-                <div key={member.id} className="flex items-center gap-3">
-                  <div className="relative">
-                    <Avatar className="w-8 h-8">
-                      <AvatarImage src={member.avatar_url || ""} alt={member.name} />
-                      <AvatarFallback>
-                        {member.name
-                          .split(" ")
-                          .map((n) => n[0])
-                          .join("")}
-                      </AvatarFallback>
-                    </Avatar>
-                    <div
-                      className={`absolute -bottom-1 -right-1 w-3 h-3 rounded-full border-2 border-background ${
-                        member.status === "online" ? "bg-green-500" : "bg-yellow-500"
-                      }`}
-                    ></div>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">{member.name}</p>
-                    <p className="text-xs text-muted-foreground truncate">{getArbiterTitle(member.role)}</p>
-                  </div>
+        <div className="lg:col-span-1 bg-background flex flex-col min-h-0">
+          <div className="p-3 border-b shrink-0">
+            <h3 className="text-lg font-semibold">{activeRoom?.is_direct_message ? "Contact" : "Members"}</h3>
+            {!activeRoom?.is_direct_message && (
+              <p className="text-xs text-muted-foreground">
+                {roomMembers.filter((m) => onlineIds.has(m.id)).length} of {roomMembers.length} online
+              </p>
+            )}
+          </div>
+          <div className="flex-1 space-y-3 overflow-y-auto p-3 min-h-0">
+            {roomMembers.map((member) => (
+              <div key={member.id} className="flex items-center gap-3">
+                <div className="relative shrink-0">
+                  <Avatar className="w-8 h-8">
+                    <AvatarImage src={member.avatar_url || ""} alt={member.name} />
+                    <AvatarFallback>
+                      {member.name
+                        .split(" ")
+                        .map((n) => n[0])
+                        .join("")}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div className={`absolute -bottom-1 -right-1 w-3 h-3 rounded-full border-2 border-background ${onlineIds.has(member.id) ? "bg-green-500" : "bg-gray-300"}`}></div>
                 </div>
-              ))}
-              {onlineMembers.length === 0 && (
-                <p className="text-center text-muted-foreground py-4">No members online</p>
-              )}
-
-              <div className="pt-4 border-t">
-                <h4 className="text-sm font-medium mb-3">Quick Actions</h4>
-                <div className="space-y-2">
-                  <Button variant="outline" size="sm" className="w-full justify-start bg-transparent">
-                    <Users className="w-4 h-4 mr-2" />
-                    View All Members
-                  </Button>
-                  <Button variant="outline" size="sm" className="w-full justify-start bg-transparent">
-                    <MessageSquare className="w-4 h-4 mr-2" />
-                    Room Settings
-                  </Button>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate">{member.name}</p>
+                  <p className="text-xs text-muted-foreground truncate">{onlineIds.has(member.id) ? "online" : getArbiterTitle(member.role)}</p>
                 </div>
               </div>
-            </CardContent>
-          </Card>
+            ))}
+            {roomMembers.length === 0 && <p className="text-center text-muted-foreground py-4">No members</p>}
+          </div>
         </div>
       </div>
+
+      <Dialog open={!!infoMessage} onOpenChange={(open) => !open && setInfoMessage(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Message Info</DialogTitle>
+            <DialogDescription>{infoMessage && formatTime(infoMessage.created_at)}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="p-3 rounded-lg bg-muted text-sm">
+              {infoMessage?.message_type === "text" ? infoMessage.content : `[${infoMessage?.message_type}]`}
+            </div>
+            <div>
+              <p className="text-sm font-medium mb-1">Seen by</p>
+              {readerNames.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No one else has read this yet.</p>
+              ) : (
+                <ul className="text-sm text-muted-foreground space-y-1">
+                  {readerNames.map((name) => (
+                    <li key={name}>{name}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
