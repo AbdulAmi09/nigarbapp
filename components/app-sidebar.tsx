@@ -14,7 +14,6 @@ import {
   MapPin,
   BookOpen,
   UserCheck,
-  Code,
   ClipboardList,
   Award,
   LogOut,
@@ -66,7 +65,6 @@ const organizationItems = [
   { title: "Events & Programs", url: "/dashboard/events", icon: Trophy },
   { title: "Resources", url: "/dashboard/resources", icon: BookOpen },
   { title: "Executives", url: "/dashboard/executives", icon: UserCheck },
-  { title: "Developers", url: "/dashboard/developers", icon: Code },
 ]
 
 interface UserProfile {

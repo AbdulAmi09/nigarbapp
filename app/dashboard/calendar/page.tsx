@@ -56,6 +56,7 @@ export default function CalendarPage() {
           )
         `)
         .eq("arbiter_id", user.id)
+        .neq("assignment_status", "Declined")
 
       // Fetch events
       const { data: eventsData } = await supabase

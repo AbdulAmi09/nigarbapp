@@ -38,7 +38,9 @@ export default function TournamentEvaluationModal({
     arbiters_coordination_rating: "5",
     venue_quality_rating: "5",
     time_management_rating: "5",
+    equipment_rating: "5",
     overall_rating: "5",
+    would_officiate_again: "true",
     strengths: "",
     improvements: "",
     additional_comments: "",
@@ -68,7 +70,9 @@ export default function TournamentEvaluationModal({
         communication_rating: Number.parseInt(formData.arbiters_coordination_rating),
         venue_rating: Number.parseInt(formData.venue_quality_rating),
         time_management_rating: Number.parseInt(formData.time_management_rating),
+        equipment_rating: Number.parseInt(formData.equipment_rating),
         overall_rating: Number.parseInt(formData.overall_rating),
+        would_officiate_again: formData.would_officiate_again === "true",
         positive_feedback: formData.strengths,
         areas_for_improvement: formData.improvements,
         recommendations: formData.additional_comments,
@@ -91,7 +95,9 @@ export default function TournamentEvaluationModal({
         arbiters_coordination_rating: "5",
         venue_quality_rating: "5",
         time_management_rating: "5",
+        equipment_rating: "5",
         overall_rating: "5",
+        would_officiate_again: "true",
         strengths: "",
         improvements: "",
         additional_comments: "",
@@ -139,6 +145,7 @@ export default function TournamentEvaluationModal({
               { key: "arbiters_coordination_rating", label: "Arbiters Coordination" },
               { key: "venue_quality_rating", label: "Venue Quality" },
               { key: "time_management_rating", label: "Time Management" },
+              { key: "equipment_rating", label: "Equipment Quality" },
             ].map(({ key, label }) => (
               <div key={key} className="flex items-center gap-4">
                 <Label className="w-40 text-sm">{label}</Label>
@@ -175,6 +182,22 @@ export default function TournamentEvaluationModal({
                       {num}
                     </SelectItem>
                   ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex items-center gap-4">
+              <Label className="w-40 text-sm">Would officiate again?</Label>
+              <Select
+                value={formData.would_officiate_again}
+                onValueChange={(value) => handleInputChange("would_officiate_again", value)}
+              >
+                <SelectTrigger className="w-28">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="true">Yes</SelectItem>
+                  <SelectItem value="false">No</SelectItem>
                 </SelectContent>
               </Select>
             </div>
