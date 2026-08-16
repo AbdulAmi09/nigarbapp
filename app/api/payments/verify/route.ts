@@ -23,7 +23,7 @@ export async function POST(request: NextRequest) {
 
     if (transaction.status === "success") {
       // Update payment record
-      const { error: updateError } = await supabase
+      const { data: updatedPayment, error: updateError } = await supabase
         .from("payments")
         .update({
           payment_status: "paid",
@@ -31,10 +31,19 @@ export async function POST(request: NextRequest) {
           payment_method: transaction.channel,
         })
         .eq("transaction_reference", reference)
+        .select("id")
+        .single()
 
       if (updateError) {
         console.error("[v0] Payment verify update error:", updateError)
         return NextResponse.json({ error: "Failed to record verified payment" }, { status: 500 })
+      }
+
+      if (updatedPayment) {
+        await supabase
+          .from("event_registrations")
+          .update({ payment_status: "paid" })
+          .eq("payment_id", updatedPayment.id)
       }
 
       return NextResponse.json({
@@ -43,13 +52,22 @@ export async function POST(request: NextRequest) {
         transaction,
       })
     } else {
-      const { error: updateError } = await supabase
+      const { data: updatedPayment, error: updateError } = await supabase
         .from("payments")
         .update({ payment_status: "cancelled" })
         .eq("transaction_reference", reference)
+        .select("id")
+        .single()
 
       if (updateError) {
         console.error("[v0] Payment verify update error:", updateError)
+      }
+
+      if (updatedPayment) {
+        await supabase
+          .from("event_registrations")
+          .update({ status: "cancelled", cancelled_at: new Date().toISOString() })
+          .eq("payment_id", updatedPayment.id)
       }
 
       return NextResponse.json({

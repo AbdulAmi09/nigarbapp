@@ -7,8 +7,9 @@ import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Trophy, Calendar, MapPin, Users, Clock, Star, Filter, Search, Plus, Loader2 } from "lucide-react"
+import { Trophy, Calendar, MapPin, Users, Clock, Star, Filter, Search, Plus, Loader2, Check } from "lucide-react"
 import { createBrowserClient } from "@supabase/ssr"
+import { useRouter } from "next/navigation"
 
 const supabase = createBrowserClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!)
 
@@ -21,16 +22,28 @@ interface Event {
   location: string
   organizer: string
   participants: number
+  maxAttendees: number | null
   registrationDeadline: string
   fee: string
+  feeAmount: number
   status: string
   description: string
   prizes: string
 }
 
+interface Registration {
+  status: string
+  payment_status: string
+}
+
 export default function EventsPage() {
+  const router = useRouter()
   const [events, setEvents] = useState<Event[]>([])
+  const [registrations, setRegistrations] = useState<Record<string, Registration>>({})
+  const [userId, setUserId] = useState<string | null>(null)
+  const [userEmail, setUserEmail] = useState("")
   const [loading, setLoading] = useState(true)
+  const [registering, setRegistering] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState("")
   const [typeFilter, setTypeFilter] = useState("all")
   const [statusFilter, setStatusFilter] = useState("all")
@@ -41,6 +54,14 @@ export default function EventsPage() {
 
   const fetchEvents = async () => {
     try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser()
+      if (user) {
+        setUserId(user.id)
+        setUserEmail(user.email || "")
+      }
+
       const { data, error } = await supabase.from("events").select("*").order("start_date", { ascending: true })
 
       if (error) throw error
@@ -53,7 +74,8 @@ export default function EventsPage() {
         date: formatDateRange(event.start_date, event.end_date),
         location: [event.venue, event.city, event.state].filter(Boolean).join(", ") || "TBD",
         organizer: "NCAA",
-        participants: event.current_attendees || event.max_attendees || 0,
+        participants: event.current_attendees || 0,
+        maxAttendees: event.max_attendees ?? null,
         registrationDeadline: event.registration_deadline
           ? new Date(event.registration_deadline).toLocaleDateString("en-US", {
               month: "short",
@@ -62,16 +84,126 @@ export default function EventsPage() {
             })
           : "TBD",
         fee: event.registration_fee ? `₦${Number(event.registration_fee).toLocaleString()}` : "Free",
+        feeAmount: Number(event.registration_fee) || 0,
         status: getEventStatus(event.start_date, event.end_date),
         description: event.description || "",
         prizes: event.materials_url || "Certificates available",
       }))
 
       setEvents(formattedEvents)
+
+      if (user) {
+        const { data: regData } = await supabase
+          .from("event_registrations")
+          .select("event_id, status, payment_status")
+          .eq("arbiter_id", user.id)
+
+        const regMap: Record<string, Registration> = {}
+        regData?.forEach((r: any) => {
+          regMap[r.event_id] = { status: r.status, payment_status: r.payment_status }
+        })
+        setRegistrations(regMap)
+      }
     } catch (error) {
       console.error("Error fetching events:", error)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleRegister = async (event: Event) => {
+    if (!userId) {
+      router.push("/auth/login")
+      return
+    }
+    setRegistering(event.id)
+    try {
+      if (event.feeAmount > 0) {
+        const { data: payment, error: paymentError } = await supabase
+          .from("payments")
+          .insert({
+            arbiter_id: userId,
+            amount: event.feeAmount,
+            payment_type: "event_registration",
+            payment_status: "processing",
+            description: `Registration: ${event.title}`,
+          })
+          .select()
+          .single()
+
+        if (paymentError) throw paymentError
+
+        const { error: regError } = await supabase.from("event_registrations").insert({
+          event_id: event.id,
+          arbiter_id: userId,
+          status: "registered",
+          payment_status: "pending",
+          payment_id: payment.id,
+        })
+
+        if (regError) throw regError
+
+        const response = await fetch("/api/payments/initialize", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            amount: event.feeAmount,
+            email: userEmail,
+            payment_id: payment.id,
+            metadata: { payment_type: "event_registration", description: event.title },
+          }),
+        })
+
+        const data = await response.json()
+        if (data.authorization_url) {
+          window.location.href = data.authorization_url
+          return
+        }
+        throw new Error(data.error || "Could not start payment")
+      }
+
+      const { error: regError } = await supabase.from("event_registrations").insert({
+        event_id: event.id,
+        arbiter_id: userId,
+        status: "registered",
+        payment_status: "not_required",
+      })
+
+      if (regError) throw regError
+
+      setRegistrations((prev) => ({ ...prev, [event.id]: { status: "registered", payment_status: "not_required" } }))
+      setEvents((prev) => prev.map((e) => (e.id === event.id ? { ...e, participants: e.participants + 1 } : e)))
+    } catch (error) {
+      console.error("[v0] Event registration error:", error)
+    } finally {
+      setRegistering(null)
+    }
+  }
+
+  const handleCancelRegistration = async (event: Event) => {
+    if (!userId) return
+    setRegistering(event.id)
+    try {
+      const { error } = await supabase
+        .from("event_registrations")
+        .update({ status: "cancelled", cancelled_at: new Date().toISOString() })
+        .eq("event_id", event.id)
+        .eq("arbiter_id", userId)
+
+      if (error) throw error
+
+      setRegistrations((prev) => {
+        const next = { ...prev }
+        delete next[event.id]
+        return next
+      })
+      setEvents((prev) =>
+        prev.map((e) => (e.id === event.id ? { ...e, participants: Math.max(e.participants - 1, 0) } : e)),
+      )
+    } catch (error) {
+      console.error("[v0] Cancel registration error:", error)
+    } finally {
+      setRegistering(null)
     }
   }
 
@@ -126,6 +258,55 @@ export default function EventsPage() {
       default:
         return "bg-gray-500/10 text-gray-600"
     }
+  }
+
+  const renderRegisterButton = (event: Event, label: string) => {
+    const registration = registrations[event.id]
+    const isRegistering = registering === event.id
+    const isFull = event.maxAttendees !== null && event.participants >= event.maxAttendees
+
+    if (registration && registration.status === "registered") {
+      if (registration.payment_status === "pending") {
+        return (
+          <Button className="w-full" variant="outline" disabled>
+            Payment Pending
+          </Button>
+        )
+      }
+      return (
+        <>
+          <Button className="w-full" variant="outline" disabled>
+            <Check className="w-4 h-4 mr-2" />
+            Registered
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="w-full text-muted-foreground"
+            onClick={() => handleCancelRegistration(event)}
+            disabled={isRegistering}
+          >
+            {isRegistering ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+            Cancel Registration
+          </Button>
+        </>
+      )
+    }
+
+    if (isFull) {
+      return (
+        <Button className="w-full" variant="outline" disabled>
+          Event Full
+        </Button>
+      )
+    }
+
+    return (
+      <Button className="w-full" onClick={() => handleRegister(event)} disabled={isRegistering}>
+        {isRegistering ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+        {label}
+      </Button>
+    )
   }
 
   const filteredEvents = events.filter((event) => {
@@ -331,7 +512,7 @@ export default function EventsPage() {
                       <div className="flex flex-col gap-2 lg:w-48">
                         {event.status === "open" && (
                           <>
-                            <Button className="w-full">Register Now</Button>
+                            {renderRegisterButton(event, "Register Now")}
                             <Button variant="outline" className="w-full bg-transparent">
                               View Details
                             </Button>
@@ -415,7 +596,7 @@ export default function EventsPage() {
                         <div className="flex flex-col gap-2 lg:w-48">
                           {event.status === "open" && (
                             <>
-                              <Button className="w-full">Register</Button>
+                              {renderRegisterButton(event, "Register")}
                               <Button variant="outline" className="w-full bg-transparent">
                                 Tournament Info
                               </Button>
@@ -489,7 +670,7 @@ export default function EventsPage() {
                         <div className="flex flex-col gap-2 lg:w-48">
                           {event.status === "open" && (
                             <>
-                              <Button className="w-full">Register</Button>
+                              {renderRegisterButton(event, "Register")}
                               <Button variant="outline" className="w-full bg-transparent">
                                 Program Details
                               </Button>
