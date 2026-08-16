@@ -24,10 +24,12 @@ import {
   X,
   Plus,
   Pause,
+  UsersRound,
 } from "lucide-react"
 import { createBrowserClient } from "@supabase/ssr"
 import { useEffect, useState, useRef } from "react"
 import { useRouter } from "next/navigation"
+import { useCall } from "@/components/call-provider"
 
 interface ChatRoom {
   id: string
@@ -37,6 +39,7 @@ interface ChatRoom {
   logo_url: string | null
   is_direct_message: boolean
   direct_message_with: string | null
+  created_by: string | null
   member_count?: number
 }
 
@@ -68,10 +71,12 @@ interface SearchUser {
   email: string
   avatar_url: string | null
   arbiter_category: string
+  fide_id: string | null
 }
 
 export default function ChatPage() {
   const router = useRouter()
+  const { startCall } = useCall()
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
@@ -98,6 +103,13 @@ export default function ChatPage() {
   const [showDMSearch, setShowDMSearch] = useState(false)
   const [dmSearchQuery, setDmSearchQuery] = useState("")
   const [dmSearchResults, setDmSearchResults] = useState<SearchUser[]>([])
+  const [isSuperadmin, setIsSuperadmin] = useState(false)
+  const [showCreateGroup, setShowCreateGroup] = useState(false)
+  const [groupName, setGroupName] = useState("")
+  const [groupSearchQuery, setGroupSearchQuery] = useState("")
+  const [groupSearchResults, setGroupSearchResults] = useState<SearchUser[]>([])
+  const [groupMembers, setGroupMembers] = useState<SearchUser[]>([])
+  const [creatingGroup, setCreatingGroup] = useState(false)
   const chatContainerRef = useRef<HTMLDivElement>(null)
 
   const supabase = createBrowserClient(
@@ -118,6 +130,9 @@ export default function ChatPage() {
 
       setCurrentUserId(user.id)
 
+      const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).single()
+      setIsSuperadmin(profile?.role === "superadmin")
+
       // Fetch only rooms where user is a member
       const { data: memberRooms } = await supabase
         .from("group_members")
@@ -131,7 +146,8 @@ export default function ChatPage() {
             description,
             logo_url,
             is_direct_message,
-            direct_message_with
+            direct_message_with,
+            created_by
           )
         `,
         )
@@ -321,15 +337,14 @@ export default function ChatPage() {
 
     try {
       const isImage = file.type.startsWith("image/")
-      const bucketName = isImage ? "chat-files" : "chat-files"
       const folder = isImage ? "images" : "files"
       const fileName = `${currentUserId}/${activeRoom.id}/${folder}/${Date.now()}-${file.name}`
 
-      const { error: uploadError } = await supabase.storage.from(bucketName).upload(fileName, file)
+      const { error: uploadError } = await supabase.storage.from("chat-files").upload(fileName, file)
 
       if (uploadError) throw uploadError
 
-      const { data: urlData } = supabase.storage.from(bucketName).getPublicUrl(fileName)
+      const { data: urlData } = supabase.storage.from("chat-files").getPublicUrl(fileName)
 
       const messageType = isImage ? "image" : "file"
 
@@ -493,6 +508,76 @@ export default function ChatPage() {
     }
   }
 
+  const searchUsersForGroup = async (query: string) => {
+    setGroupSearchQuery(query)
+    if (!query.trim()) {
+      setGroupSearchResults([])
+      return
+    }
+
+    const { data } = await supabase.rpc("search_users_for_dm", { p_search_query: query, p_limit: 10 })
+    if (data) {
+      setGroupSearchResults(data.filter((u: SearchUser) => !groupMembers.some((m) => m.id === u.id)))
+    }
+  }
+
+  const addGroupMember = (user: SearchUser) => {
+    setGroupMembers((prev) => [...prev, user])
+    setGroupSearchResults((prev) => prev.filter((u) => u.id !== user.id))
+    setGroupSearchQuery("")
+  }
+
+  const removeGroupMember = (userId: string) => {
+    setGroupMembers((prev) => prev.filter((m) => m.id !== userId))
+  }
+
+  const handleCreateGroup = async () => {
+    if (!currentUserId || !groupName.trim() || groupMembers.length === 0) return
+    setCreatingGroup(true)
+
+    try {
+      const memberIds = [currentUserId, ...groupMembers.map((m) => m.id)]
+
+      const { data: room, error: roomError } = await supabase
+        .from("chat_rooms")
+        .insert({
+          name: groupName.trim(),
+          room_type: "Group",
+          is_private: true,
+          is_direct_message: false,
+          created_by: currentUserId,
+          members: memberIds,
+        })
+        .select()
+        .single()
+
+      if (roomError) throw roomError
+
+      const { error: membersError } = await supabase.from("group_members").insert(
+        memberIds.map((id) => ({ group_id: room.id, user_id: id, role: id === currentUserId ? "owner" : "member" })),
+      )
+
+      if (membersError) throw membersError
+
+      const newRoom: ChatRoom = { ...room, member_count: memberIds.length }
+      setChatRooms((prev) => [newRoom, ...prev])
+      setFilteredRooms((prev) => [newRoom, ...prev])
+      setActiveRoom(newRoom)
+      await fetchMessages(newRoom.id)
+      await fetchOnlineMembers(newRoom.id)
+
+      setShowCreateGroup(false)
+      setGroupName("")
+      setGroupMembers([])
+      setGroupSearchQuery("")
+      setGroupSearchResults([])
+    } catch (error) {
+      console.error("[v0] Error creating group:", error)
+    } finally {
+      setCreatingGroup(false)
+    }
+  }
+
   async function handleSendMessage(e: React.FormEvent) {
     e.preventDefault()
     if (!newMessage.trim() || !activeRoom || !currentUserId) return
@@ -545,6 +630,12 @@ export default function ChatPage() {
       const filtered = chatRooms.filter((room) => room.name.toLowerCase().includes(searchTerm.toLowerCase()))
       setFilteredRooms(filtered)
     }
+  }
+
+  const getOtherUserId = (room: ChatRoom) => {
+    if (!room.is_direct_message || !currentUserId) return null
+    if (room.created_by === currentUserId) return room.direct_message_with
+    return room.created_by
   }
 
   const getRoomTypeColor = (type: string) => {
@@ -611,14 +702,26 @@ export default function ChatPage() {
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-lg">Chat Rooms</CardTitle>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setShowDMSearch(!showDMSearch)}
-                  title="Start direct message"
-                >
-                  <Plus className="w-4 h-4" />
-                </Button>
+                <div className="flex items-center">
+                  {isSuperadmin && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => setShowCreateGroup(!showCreateGroup)}
+                      title="Create group"
+                    >
+                      <UsersRound className="w-4 h-4" />
+                    </Button>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setShowDMSearch(!showDMSearch)}
+                    title="Start direct message"
+                  >
+                    <Plus className="w-4 h-4" />
+                  </Button>
+                </div>
               </div>
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
@@ -635,7 +738,7 @@ export default function ChatPage() {
               <div className="p-3 border-b bg-muted/50">
                 <div className="flex items-center gap-2 mb-2">
                   <Input
-                    placeholder="Search users..."
+                    placeholder="Search by FIDE ID..."
                     value={dmSearchQuery}
                     onChange={(e) => searchUsersForDM(e.target.value)}
                     className="flex-1"
@@ -644,6 +747,9 @@ export default function ChatPage() {
                     <X className="w-4 h-4" />
                   </Button>
                 </div>
+                {dmSearchQuery.trim() && dmSearchResults.length === 0 && (
+                  <p className="text-xs text-muted-foreground px-2">No arbiter found with that FIDE ID.</p>
+                )}
                 {dmSearchResults.length > 0 && (
                   <div className="space-y-1 max-h-40 overflow-y-auto">
                     {dmSearchResults.map((user) => (
@@ -658,12 +764,77 @@ export default function ChatPage() {
                         </Avatar>
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-medium truncate">{user.name}</p>
-                          <p className="text-xs text-muted-foreground truncate">{user.email}</p>
+                          <p className="text-xs text-muted-foreground truncate">FIDE ID: {user.fide_id}</p>
                         </div>
                       </button>
                     ))}
                   </div>
                 )}
+              </div>
+            )}
+
+            {showCreateGroup && (
+              <div className="p-3 border-b bg-muted/50 space-y-2">
+                <div className="flex items-center gap-2">
+                  <Input
+                    placeholder="Group name..."
+                    value={groupName}
+                    onChange={(e) => setGroupName(e.target.value)}
+                    className="flex-1"
+                  />
+                  <Button variant="ghost" size="icon" onClick={() => setShowCreateGroup(false)}>
+                    <X className="w-4 h-4" />
+                  </Button>
+                </div>
+
+                {groupMembers.length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {groupMembers.map((m) => (
+                      <Badge key={m.id} variant="secondary" className="gap-1">
+                        {m.name}
+                        <button onClick={() => removeGroupMember(m.id)}>
+                          <X className="w-3 h-3" />
+                        </button>
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+
+                <Input
+                  placeholder="Add members by FIDE ID..."
+                  value={groupSearchQuery}
+                  onChange={(e) => searchUsersForGroup(e.target.value)}
+                />
+                {groupSearchResults.length > 0 && (
+                  <div className="space-y-1 max-h-32 overflow-y-auto">
+                    {groupSearchResults.map((user) => (
+                      <button
+                        key={user.id}
+                        onClick={() => addGroupMember(user)}
+                        className="w-full flex items-center gap-2 p-2 rounded hover:bg-muted/70 text-left"
+                      >
+                        <Avatar className="w-6 h-6">
+                          <AvatarImage src={user.avatar_url || ""} alt={user.name} />
+                          <AvatarFallback>{user.name[0]}</AvatarFallback>
+                        </Avatar>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{user.name}</p>
+                          <p className="text-xs text-muted-foreground truncate">FIDE ID: {user.fide_id}</p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                <Button
+                  size="sm"
+                  className="w-full"
+                  onClick={handleCreateGroup}
+                  disabled={creatingGroup || !groupName.trim() || groupMembers.length === 0}
+                >
+                  {creatingGroup && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                  Create Group
+                </Button>
               </div>
             )}
 
@@ -738,12 +909,32 @@ export default function ChatPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Button variant="ghost" size="icon">
-                    <Phone className="w-4 h-4" />
-                  </Button>
-                  <Button variant="ghost" size="icon">
-                    <Video className="w-4 h-4" />
-                  </Button>
+                  {activeRoom && getOtherUserId(activeRoom) && (
+                    <>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => {
+                          const otherId = getOtherUserId(activeRoom)
+                          if (otherId) startCall(otherId, activeRoom.id, "voice")
+                        }}
+                        title="Voice call"
+                      >
+                        <Phone className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => {
+                          const otherId = getOtherUserId(activeRoom)
+                          if (otherId) startCall(otherId, activeRoom.id, "video")
+                        }}
+                        title="Video call"
+                      >
+                        <Video className="w-4 h-4" />
+                      </Button>
+                    </>
+                  )}
                   <Button variant="ghost" size="icon">
                     <MoreVertical className="w-4 h-4" />
                   </Button>

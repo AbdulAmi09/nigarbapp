@@ -55,6 +55,7 @@ export async function PUT(request: NextRequest) {
       "bio",
       "avatar_url",
       "years_experience",
+      "fide_id",
     ] as const
 
     const updates: Record<string, unknown> = {}

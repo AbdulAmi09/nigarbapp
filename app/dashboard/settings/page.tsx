@@ -34,6 +34,7 @@ interface Profile {
   years_experience: number | null
   license_number: string | null
   avatar_url: string | null
+  fide_id: string | null
 }
 
 export default function SettingsPage() {
@@ -43,6 +44,7 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [profileError, setProfileError] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -209,6 +211,7 @@ export default function SettingsPage() {
 
     setSaving(true)
     setSaved(false)
+    setProfileError(null)
 
     try {
       const { error } = await supabase
@@ -225,6 +228,7 @@ export default function SettingsPage() {
           arbiter_level: profile.arbiter_level,
           years_experience: profile.years_experience,
           license_number: profile.license_number,
+          fide_id: profile.fide_id || null,
         })
         .eq("id", profile.id)
 
@@ -232,8 +236,13 @@ export default function SettingsPage() {
 
       setSaved(true)
       setTimeout(() => setSaved(false), 3000)
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error saving profile:", error)
+      if (error?.code === "23505") {
+        setProfileError("That FIDE ID is already registered to another arbiter.")
+      } else {
+        setProfileError("Could not save changes. Please try again.")
+      }
     } finally {
       setSaving(false)
     }
@@ -359,6 +368,19 @@ export default function SettingsPage() {
               </div>
 
               <div className="space-y-2">
+                <Label htmlFor="fideId">FIDE ID</Label>
+                <Input
+                  id="fideId"
+                  value={profile.fide_id || ""}
+                  onChange={(e) => setProfile({ ...profile, fide_id: e.target.value })}
+                  placeholder="e.g. 8501234"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Other arbiters find you in Chat by searching this ID. Leave blank if you don&apos;t have one yet.
+                </p>
+              </div>
+
+              <div className="space-y-2">
                 <Label htmlFor="bio">Bio</Label>
                 <Textarea
                   id="bio"
@@ -433,7 +455,8 @@ export default function SettingsPage() {
                 </div>
               </div>
 
-              <div className="flex justify-end">
+              <div className="flex items-center justify-end gap-3">
+                {profileError && <p className="text-sm text-destructive">{profileError}</p>}
                 <Button onClick={handleSaveProfile} disabled={saving}>
                   {saving ? (
                     <>
