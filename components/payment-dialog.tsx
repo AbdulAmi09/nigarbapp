@@ -53,9 +53,9 @@ export default function PaymentDialog({ open, onOpenChange, userEmail, onPayment
     } = await supabase.auth.getUser()
     if (!user) return
 
-    const { data: profile } = await supabase.from("profiles").select("full_name").eq("id", user.id).single()
+    const { data: profile } = await supabase.from("profiles").select("first_name, last_name").eq("id", user.id).single()
 
-    setUserName(profile?.full_name || "")
+    setUserName(profile ? `${profile.first_name ?? ""} ${profile.last_name ?? ""}`.trim() : "")
 
     // Fetch payment due for this user
     const { data: dues } = await supabase.from("payment_due").select("*").eq("arbiter_id", user.id).eq("is_paid", false)
