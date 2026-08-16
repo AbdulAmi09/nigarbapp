@@ -36,6 +36,11 @@ import {
   LogOut,
   UserMinus,
   Settings,
+  Smile,
+  Forward,
+  History,
+  PhoneMissed,
+  PhoneOutgoing,
 } from "lucide-react"
 import { createBrowserClient } from "@supabase/ssr"
 import type { RealtimeChannel } from "@supabase/supabase-js"
@@ -94,6 +99,8 @@ interface SearchUser {
   arbiter_category: string
   fide_id: string | null
 }
+
+const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"]
 
 const MESSAGE_SELECT = `
   id,
@@ -174,6 +181,14 @@ export default function ChatPage() {
   const [savingGroupInfo, setSavingGroupInfo] = useState(false)
   const [addMemberQuery, setAddMemberQuery] = useState("")
   const [addMemberResults, setAddMemberResults] = useState<SearchUser[]>([])
+  const [reactions, setReactions] = useState<Record<string, { emoji: string; userIds: string[] }[]>>({})
+  const [openReactionPickerFor, setOpenReactionPickerFor] = useState<string | null>(null)
+  const [forwardingMessage, setForwardingMessage] = useState<Message | null>(null)
+  const [showCallLog, setShowCallLog] = useState(false)
+  const [callLogEntries, setCallLogEntries] = useState<
+    { id: string; peerId: string; peerName: string; call_type: string; status: string; created_at: string; outgoing: boolean }[]
+  >([])
+  const [loadingCallLog, setLoadingCallLog] = useState(false)
   const chatContainerRef = useRef<HTMLDivElement>(null)
 
   const supabase = createBrowserClient(
@@ -388,6 +403,12 @@ export default function ChatPage() {
           }
         },
       )
+      .on("postgres_changes", { event: "*", schema: "public", table: "message_reactions" }, () => {
+        setMessages((prev) => {
+          if (prev.length > 0) fetchReactions(prev.map((m) => m.id))
+          return prev
+        })
+      })
       .on("broadcast", { event: "typing" }, ({ payload }: { payload: { userId: string; name: string } }) => {
         if (payload.userId === currentUserId) return
         setTypingUsers((prev) => ({ ...prev, [payload.userId]: payload.name }))
@@ -434,8 +455,112 @@ export default function ChatPage() {
 
     if (data) {
       setMessages(data.map(formatMessage))
+      fetchReactions(data.map((m: any) => m.id))
       setTimeout(() => scrollToBottom(), 100)
     }
+  }
+
+  async function fetchReactions(messageIds: string[]) {
+    if (messageIds.length === 0) {
+      setReactions({})
+      return
+    }
+    const { data } = await supabase.from("message_reactions").select("message_id, user_id, emoji").in("message_id", messageIds)
+
+    const grouped: Record<string, Record<string, string[]>> = {}
+    data?.forEach((r: any) => {
+      grouped[r.message_id] = grouped[r.message_id] || {}
+      grouped[r.message_id][r.emoji] = grouped[r.message_id][r.emoji] || []
+      grouped[r.message_id][r.emoji].push(r.user_id)
+    })
+
+    const result: Record<string, { emoji: string; userIds: string[] }[]> = {}
+    Object.entries(grouped).forEach(([msgId, emojiMap]) => {
+      result[msgId] = Object.entries(emojiMap).map(([emoji, userIds]) => ({ emoji, userIds }))
+    })
+    setReactions(result)
+  }
+
+  const toggleReaction = async (messageId: string, emoji: string) => {
+    if (!currentUserId) return
+    setOpenReactionPickerFor(null)
+
+    const existing = reactions[messageId]?.find((r) => r.emoji === emoji)
+    const alreadyReacted = existing?.userIds.includes(currentUserId)
+
+    if (alreadyReacted) {
+      await supabase.from("message_reactions").delete().eq("message_id", messageId).eq("user_id", currentUserId).eq("emoji", emoji)
+      setReactions((prev) => {
+        const next = { ...prev }
+        next[messageId] = (next[messageId] || [])
+          .map((r) => (r.emoji === emoji ? { ...r, userIds: r.userIds.filter((id) => id !== currentUserId) } : r))
+          .filter((r) => r.userIds.length > 0)
+        return next
+      })
+    } else {
+      await supabase.from("message_reactions").insert({ message_id: messageId, user_id: currentUserId, emoji })
+      setReactions((prev) => {
+        const next = { ...prev }
+        const list = next[messageId] ? [...next[messageId]] : []
+        const idx = list.findIndex((r) => r.emoji === emoji)
+        if (idx >= 0) list[idx] = { ...list[idx], userIds: [...list[idx].userIds, currentUserId] }
+        else list.push({ emoji, userIds: [currentUserId] })
+        next[messageId] = list
+        return next
+      })
+    }
+  }
+
+  const handleForward = async (targetRoomId: string) => {
+    if (!forwardingMessage || !currentUserId) return
+    await supabase.from("chat_messages").insert({
+      room_id: targetRoomId,
+      sender_id: currentUserId,
+      content: forwardingMessage.content,
+      message_type: forwardingMessage.message_type,
+      file_url: forwardingMessage.file_url || null,
+      file_name: forwardingMessage.file_name || null,
+      file_size: forwardingMessage.file_size || null,
+    })
+    setForwardingMessage(null)
+  }
+
+  const openCallLog = async () => {
+    setShowCallLog(true)
+    if (!currentUserId) return
+    setLoadingCallLog(true)
+
+    const { data } = await supabase
+      .from("calls")
+      .select("id, caller_id, callee_id, call_type, status, created_at")
+      .or(`caller_id.eq.${currentUserId},callee_id.eq.${currentUserId}`)
+      .order("created_at", { ascending: false })
+      .limit(50)
+
+    if (data) {
+      const peerIds = Array.from(new Set(data.map((c: any) => (c.caller_id === currentUserId ? c.callee_id : c.caller_id))))
+      const { data: profiles } = await supabase.from("profiles").select("id, first_name, last_name").in("id", peerIds)
+      const nameMap: Record<string, string> = {}
+      profiles?.forEach((p: any) => {
+        nameMap[p.id] = `${p.first_name || ""} ${p.last_name || ""}`.trim() || "Unknown"
+      })
+
+      setCallLogEntries(
+        data.map((c: any) => {
+          const peerId = c.caller_id === currentUserId ? c.callee_id : c.caller_id
+          return {
+            id: c.id,
+            peerId,
+            peerName: nameMap[peerId] || "Unknown",
+            call_type: c.call_type,
+            status: c.status,
+            created_at: c.created_at,
+            outgoing: c.caller_id === currentUserId,
+          }
+        }),
+      )
+    }
+    setLoadingCallLog(false)
   }
 
   async function fetchOtherUserLastSeen(room: ChatRoom, uidOverride?: string | null) {
@@ -926,6 +1051,8 @@ export default function ChatPage() {
     setShowNewMessagesButton(false)
     setNewMessagesCount(0)
     setReplyingTo(null)
+    setOpenReactionPickerFor(null)
+    cancelEditMessage()
     await fetchMessages(room.id)
     await fetchRoomMembers(room)
     await fetchOtherUserLastSeen(room)
@@ -1049,6 +1176,9 @@ export default function ChatPage() {
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold">Chats</h2>
               <div className="flex items-center">
+                <Button variant="ghost" size="icon" onClick={openCallLog} title="Call log">
+                  <History className="w-4 h-4" />
+                </Button>
                 {isSuperadmin && (
                   <Button variant="ghost" size="icon" onClick={() => setShowCreateGroup(!showCreateGroup)} title="Create group">
                     <UsersRound className="w-4 h-4" />
@@ -1254,10 +1384,27 @@ export default function ChatPage() {
                   <span className="text-xs bg-muted text-muted-foreground px-3 py-1 rounded-full">{group.date}</span>
                 </div>
                 {group.items.map((message) => {
+                  if (message.message_type === "call") {
+                    const missed = message.content.startsWith("Missed")
+                    return (
+                      <div key={message.id} className="flex justify-center my-2">
+                        <span className="text-xs bg-muted text-muted-foreground px-3 py-1.5 rounded-full flex items-center gap-1.5">
+                          {missed ? (
+                            <PhoneMissed className="w-3.5 h-3.5 text-destructive" />
+                          ) : (
+                            <PhoneOutgoing className="w-3.5 h-3.5" />
+                          )}
+                          {message.content} · {formatTime(message.created_at)}
+                        </span>
+                      </div>
+                    )
+                  }
+
                   const isOwn = message.sender_id === currentUserId
                   const isRead = activeRoom?.is_direct_message
                     ? !!(activeRoomOtherUserId && message.read_by.includes(activeRoomOtherUserId))
                     : message.read_by.some((id) => id !== message.sender_id)
+                  const messageReactions = reactions[message.id] || []
 
                   return (
                     <div key={message.id} className={`group flex gap-3 py-1.5 ${isOwn ? "flex-row-reverse" : ""}`}>
@@ -1318,10 +1465,39 @@ export default function ChatPage() {
                             )}
                           </div>
 
-                          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity relative">
+                            {!message.is_deleted && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="w-6 h-6"
+                                onClick={() => setOpenReactionPickerFor(openReactionPickerFor === message.id ? null : message.id)}
+                                title="React"
+                              >
+                                <Smile className="w-3.5 h-3.5" />
+                              </Button>
+                            )}
+                            {openReactionPickerFor === message.id && (
+                              <div className={`absolute top-7 z-10 bg-popover border rounded-full shadow-lg flex items-center gap-0.5 p-1 ${isOwn ? "right-0" : "left-0"}`}>
+                                {REACTION_EMOJIS.map((emoji) => (
+                                  <button
+                                    key={emoji}
+                                    className="text-lg hover:scale-125 transition-transform px-0.5"
+                                    onClick={() => toggleReaction(message.id, emoji)}
+                                  >
+                                    {emoji}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
                             {!message.is_deleted && (
                               <Button variant="ghost" size="icon" className="w-6 h-6" onClick={() => setReplyingTo(message)} title="Reply">
                                 <Reply className="w-3.5 h-3.5" />
+                              </Button>
+                            )}
+                            {!message.is_deleted && (
+                              <Button variant="ghost" size="icon" className="w-6 h-6" onClick={() => setForwardingMessage(message)} title="Forward">
+                                <Forward className="w-3.5 h-3.5" />
                               </Button>
                             )}
                             {isOwn && (
@@ -1341,6 +1517,23 @@ export default function ChatPage() {
                             )}
                           </div>
                         </div>
+
+                        {messageReactions.length > 0 && (
+                          <div className={`flex flex-wrap gap-1 mt-1 ${isOwn ? "justify-end" : ""}`}>
+                            {messageReactions.map((r) => (
+                              <button
+                                key={r.emoji}
+                                onClick={() => toggleReaction(message.id, r.emoji)}
+                                className={`text-xs rounded-full px-1.5 py-0.5 border flex items-center gap-1 ${
+                                  currentUserId && r.userIds.includes(currentUserId) ? "bg-primary/10 border-primary/30" : "bg-muted border-transparent"
+                                }`}
+                              >
+                                <span>{r.emoji}</span>
+                                <span className="text-muted-foreground">{r.userIds.length}</span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
 
                         <div className={`flex items-center gap-1 mt-0.5 ${isOwn ? "justify-end" : ""}`}>
                           {message.is_edited && !message.is_deleted && <span className="text-xs text-muted-foreground">(edited)</span>}
@@ -1598,6 +1791,77 @@ export default function ChatPage() {
               )
             })()}
           </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!forwardingMessage} onOpenChange={(open) => !open && setForwardingMessage(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Forward Message</DialogTitle>
+            <DialogDescription>
+              {forwardingMessage?.message_type === "text" ? forwardingMessage.content : `[${forwardingMessage?.message_type}]`}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1 max-h-80 overflow-y-auto">
+            {chatRooms.map((room) => (
+              <button
+                key={room.id}
+                onClick={() => handleForward(room.id)}
+                className="w-full flex items-center gap-3 p-2 rounded hover:bg-muted/70 text-left"
+              >
+                <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 ${getRoomTypeColor(room.room_type)}`}>
+                  {room.is_direct_message ? <MessageSquare className="w-4 h-4" /> : <Hash className="w-4 h-4" />}
+                </div>
+                <p className="text-sm font-medium truncate">{room.name}</p>
+              </button>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showCallLog} onOpenChange={setShowCallLog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Call Log</DialogTitle>
+          </DialogHeader>
+          {loadingCallLog ? (
+            <div className="flex justify-center py-8">
+              <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : callLogEntries.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-8">No calls yet</p>
+          ) : (
+            <div className="space-y-1 max-h-96 overflow-y-auto">
+              {callLogEntries.map((entry) => {
+                const missed = !entry.outgoing && entry.status === "missed"
+                return (
+                  <div key={entry.id} className="flex items-center gap-3 p-2">
+                    <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 ${missed ? "bg-destructive/10" : "bg-muted"}`}>
+                      {entry.call_type === "video" ? <Video className="w-4 h-4" /> : <Phone className="w-4 h-4" />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className={`text-sm font-medium truncate ${missed ? "text-destructive" : ""}`}>{entry.peerName}</p>
+                      <p className="text-xs text-muted-foreground flex items-center gap-1">
+                        {entry.outgoing ? <PhoneOutgoing className="w-3 h-3" /> : <PhoneMissed className="w-3 h-3" />}
+                        {new Date(entry.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                      </p>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => {
+                        const dmRoom = chatRooms.find((r) => getOtherUserId(r) === entry.peerId)
+                        setShowCallLog(false)
+                        startCall(entry.peerId, dmRoom?.id || null, entry.call_type as "voice" | "video")
+                      }}
+                    >
+                      <Phone className="w-4 h-4" />
+                    </Button>
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>

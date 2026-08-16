@@ -58,6 +58,8 @@ export default function CallProvider({ children }: { children: React.ReactNode }
   const callIdRef = useRef<string | null>(null)
   const roleRef = useRef<"caller" | "callee" | null>(null)
   const callTypeRef = useRef<"voice" | "video" | null>(null)
+  const callRoomIdRef = useRef<string | null>(null)
+  const callConnectedAtRef = useRef<number | null>(null)
   const signalChannelRef = useRef<RealtimeChannel | null>(null)
   const listenerChannelRef = useRef<RealtimeChannel | null>(null)
   const pcRef = useRef<RTCPeerConnection | null>(null)
@@ -127,6 +129,7 @@ export default function CallProvider({ children }: { children: React.ReactNode }
         cleanup(payload.kind === "declined" ? "declined" : "ended")
       } else if (payload.kind === "answer" && roleRef.current === "caller") {
         await pc.setRemoteDescription(new RTCSessionDescription(payload.data))
+        callConnectedAtRef.current = Date.now()
         setStatus("connected")
         if (ringTimeoutRef.current) clearTimeout(ringTimeoutRef.current)
       } else if (payload.kind === "ready" && roleRef.current === "caller") {
@@ -138,6 +141,7 @@ export default function CallProvider({ children }: { children: React.ReactNode }
         const answer = await pc.createAnswer()
         await pc.setLocalDescription(answer)
         channel.send({ type: "broadcast", event: "signal", payload: { kind: "answer", data: answer } })
+        callConnectedAtRef.current = Date.now()
         setStatus("connected")
         if (ringTimeoutRef.current) clearTimeout(ringTimeoutRef.current)
       }
@@ -196,6 +200,7 @@ export default function CallProvider({ children }: { children: React.ReactNode }
       callIdRef.current = call.id
       roleRef.current = "caller"
       callTypeRef.current = type
+      callRoomIdRef.current = roomId
       setCallType(type)
       setPeer({
         id: calleeId,
@@ -277,6 +282,19 @@ export default function CallProvider({ children }: { children: React.ReactNode }
     cleanup("declined")
   }, [])
 
+  function callHistoryText(reason: "ended" | "declined" | "missed") {
+    const label = callTypeRef.current === "video" ? "Video call" : "Voice call"
+    if (reason === "declined") return `${label} declined`
+    if (reason === "missed") return `Missed ${label.toLowerCase()}`
+    if (callConnectedAtRef.current) {
+      const secs = Math.max(0, Math.round((Date.now() - callConnectedAtRef.current) / 1000))
+      const mins = Math.floor(secs / 60)
+      const rem = secs % 60
+      return `${label} · ${mins}:${rem.toString().padStart(2, "0")}`
+    }
+    return `${label} cancelled`
+  }
+
   function cleanup(reason: "ended" | "declined" | "missed") {
     if (ringTimeoutRef.current) {
       clearTimeout(ringTimeoutRef.current)
@@ -289,6 +307,18 @@ export default function CallProvider({ children }: { children: React.ReactNode }
         .from("calls")
         .update({ status: statusValue, ended_at: new Date().toISOString() })
         .eq("id", callIdRef.current)
+    }
+
+    // Only the caller writes the call-history message — both sides run
+    // cleanup() for the same call (hangup/decline/timeout are mirrored via
+    // broadcast to the other party), so writing from both would duplicate it.
+    if (roleRef.current === "caller" && callRoomIdRef.current && userId) {
+      supabase.from("chat_messages").insert({
+        room_id: callRoomIdRef.current,
+        sender_id: userId,
+        content: callHistoryText(reason),
+        message_type: "call",
+      })
     }
 
     if (signalChannelRef.current && reason === "ended") {
@@ -309,6 +339,8 @@ export default function CallProvider({ children }: { children: React.ReactNode }
     callIdRef.current = null
     roleRef.current = null
     callTypeRef.current = null
+    callRoomIdRef.current = null
+    callConnectedAtRef.current = null
     setStatus("idle")
     setCallType(null)
     setPeer(null)
