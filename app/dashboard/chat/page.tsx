@@ -554,7 +554,7 @@ export default function ChatPage() {
       if (roomError) throw roomError
 
       const { error: membersError } = await supabase.from("group_members").insert(
-        memberIds.map((id) => ({ group_id: room.id, user_id: id, role: id === currentUserId ? "owner" : "member" })),
+        memberIds.map((id) => ({ group_id: room.id, user_id: id, role: id === currentUserId ? "admin" : "member" })),
       )
 
       if (membersError) throw membersError
