@@ -20,6 +20,11 @@ export default async function DashboardLayout({
     redirect("/auth/login")
   }
 
+  const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+  if (aal && aal.nextLevel === "aal2" && aal.nextLevel !== aal.currentLevel) {
+    redirect("/auth/mfa-challenge")
+  }
+
   return (
     <SidebarProvider>
       <div className="flex min-h-screen w-full">

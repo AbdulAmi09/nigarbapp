@@ -17,6 +17,7 @@ import { createBrowserClient } from "@supabase/ssr"
 import { useRouter } from "next/navigation"
 import { useEffect, useState, useRef } from "react"
 import { useTheme } from "next-themes"
+import MfaSettings from "@/components/mfa-settings"
 
 interface Profile {
   id: string
@@ -50,6 +51,16 @@ export default function SettingsPage() {
   const [pushNotifications, setPushNotifications] = useState(true)
   const [tournamentAlerts, setTournamentAlerts] = useState(true)
   const [paymentReminders, setPaymentReminders] = useState(true)
+  const [savingNotifications, setSavingNotifications] = useState(false)
+  const [notificationsSaved, setNotificationsSaved] = useState(false)
+
+  // Password change state
+  const [currentPassword, setCurrentPassword] = useState("")
+  const [newPassword, setNewPassword] = useState("")
+  const [confirmNewPassword, setConfirmNewPassword] = useState("")
+  const [passwordError, setPasswordError] = useState<string | null>(null)
+  const [passwordSaving, setPasswordSaving] = useState(false)
+  const [passwordSaved, setPasswordSaved] = useState(false)
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -72,11 +83,92 @@ export default function SettingsPage() {
       if (data) {
         setProfile({ ...data, email: user.email })
       }
+
+      const { data: prefs } = await supabase
+        .from("notification_preferences")
+        .select("*")
+        .eq("user_id", user.id)
+        .single()
+
+      if (prefs) {
+        setEmailNotifications(prefs.email_notifications)
+        setPushNotifications(prefs.push_notifications)
+        setTournamentAlerts(prefs.tournament_alerts)
+        setPaymentReminders(prefs.payment_reminders)
+      }
+
       setLoading(false)
     }
 
     fetchProfile()
   }, [router, supabase])
+
+  async function handleSaveNotifications() {
+    if (!profile) return
+    setSavingNotifications(true)
+    setNotificationsSaved(false)
+
+    try {
+      const { error } = await supabase.from("notification_preferences").upsert({
+        user_id: profile.id,
+        email_notifications: emailNotifications,
+        push_notifications: pushNotifications,
+        tournament_alerts: tournamentAlerts,
+        payment_reminders: paymentReminders,
+        updated_at: new Date().toISOString(),
+      })
+
+      if (error) throw error
+
+      setNotificationsSaved(true)
+      setTimeout(() => setNotificationsSaved(false), 3000)
+    } catch (error) {
+      console.error("Error saving notification preferences:", error)
+    } finally {
+      setSavingNotifications(false)
+    }
+  }
+
+  async function handleChangePassword() {
+    if (!profile?.email) return
+    setPasswordError(null)
+    setPasswordSaved(false)
+
+    if (newPassword.length < 8) {
+      setPasswordError("New password must be at least 8 characters.")
+      return
+    }
+    if (newPassword !== confirmNewPassword) {
+      setPasswordError("New passwords do not match.")
+      return
+    }
+
+    setPasswordSaving(true)
+    try {
+      const { error: reauthError } = await supabase.auth.signInWithPassword({
+        email: profile.email,
+        password: currentPassword,
+      })
+      if (reauthError) {
+        setPasswordError("Current password is incorrect.")
+        return
+      }
+
+      const { error: updateError } = await supabase.auth.updateUser({ password: newPassword })
+      if (updateError) throw updateError
+
+      setCurrentPassword("")
+      setNewPassword("")
+      setConfirmNewPassword("")
+      setPasswordSaved(true)
+      setTimeout(() => setPasswordSaved(false), 3000)
+    } catch (error) {
+      console.error("Error changing password:", error)
+      setPasswordError(error instanceof Error ? error.message : "Could not update password.")
+    } finally {
+      setPasswordSaving(false)
+    }
+  }
 
   async function handleAvatarUpload(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
@@ -403,6 +495,23 @@ export default function SettingsPage() {
                 </div>
                 <Switch checked={paymentReminders} onCheckedChange={setPaymentReminders} />
               </div>
+              <div className="flex justify-end">
+                <Button onClick={handleSaveNotifications} disabled={savingNotifications}>
+                  {savingNotifications ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Saving...
+                    </>
+                  ) : notificationsSaved ? (
+                    <>
+                      <Check className="w-4 h-4 mr-2" />
+                      Saved!
+                    </>
+                  ) : (
+                    "Save Preferences"
+                  )}
+                </Button>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
@@ -419,17 +528,50 @@ export default function SettingsPage() {
             <CardContent className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="currentPassword">Current Password</Label>
-                <Input id="currentPassword" type="password" />
+                <Input
+                  id="currentPassword"
+                  type="password"
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="newPassword">New Password</Label>
-                <Input id="newPassword" type="password" />
+                <Input
+                  id="newPassword"
+                  type="password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="confirmPassword">Confirm New Password</Label>
-                <Input id="confirmPassword" type="password" />
+                <Input
+                  id="confirmPassword"
+                  type="password"
+                  value={confirmNewPassword}
+                  onChange={(e) => setConfirmNewPassword(e.target.value)}
+                />
               </div>
-              <Button>Update Password</Button>
+              {passwordError && <p className="text-sm text-destructive">{passwordError}</p>}
+              <Button
+                onClick={handleChangePassword}
+                disabled={passwordSaving || !currentPassword || !newPassword || !confirmNewPassword}
+              >
+                {passwordSaving ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Updating...
+                  </>
+                ) : passwordSaved ? (
+                  <>
+                    <Check className="w-4 h-4 mr-2" />
+                    Updated!
+                  </>
+                ) : (
+                  "Update Password"
+                )}
+              </Button>
             </CardContent>
           </Card>
 
@@ -439,16 +581,10 @@ export default function SettingsPage() {
                 <Shield className="w-5 h-5" />
                 Two-Factor Authentication
               </CardTitle>
-              <CardDescription>Add an extra layer of security to your account.</CardDescription>
+              <CardDescription>Add an extra layer of security to your account with an authenticator app.</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label>Enable 2FA</Label>
-                  <p className="text-sm text-muted-foreground">Use authenticator app for login verification</p>
-                </div>
-                <Switch />
-              </div>
+            <CardContent>
+              <MfaSettings />
             </CardContent>
           </Card>
         </TabsContent>
@@ -476,22 +612,6 @@ export default function SettingsPage() {
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">Choose your preferred color theme</p>
-              </div>
-              <Separator />
-              <div className="space-y-2">
-                <Label>Language</Label>
-                <Select defaultValue="en">
-                  <SelectTrigger className="w-[200px]">
-                    <SelectValue placeholder="Select language" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="en">English</SelectItem>
-                    <SelectItem value="fr">French</SelectItem>
-                    <SelectItem value="ha">Hausa</SelectItem>
-                    <SelectItem value="yo">Yoruba</SelectItem>
-                    <SelectItem value="ig">Igbo</SelectItem>
-                  </SelectContent>
-                </Select>
               </div>
             </CardContent>
           </Card>
