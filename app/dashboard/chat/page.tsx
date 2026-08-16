@@ -30,6 +30,12 @@ import {
   Reply,
   Trash2,
   Info,
+  Pencil,
+  BellOff,
+  Bell,
+  LogOut,
+  UserMinus,
+  Settings,
 } from "lucide-react"
 import { createBrowserClient } from "@supabase/ssr"
 import type { RealtimeChannel } from "@supabase/supabase-js"
@@ -69,6 +75,7 @@ interface Message {
   reply_to?: string | null
   reply_preview?: { content: string; message_type: string } | null
   is_deleted?: boolean
+  is_edited?: boolean
 }
 
 interface OnlineMember {
@@ -76,6 +83,7 @@ interface OnlineMember {
   name: string
   role: string | null
   avatar_url: string | null
+  groupRole?: string
 }
 
 interface SearchUser {
@@ -99,6 +107,7 @@ const MESSAGE_SELECT = `
   read_by,
   reply_to,
   is_deleted,
+  is_edited,
   profiles:sender_id (
     first_name,
     last_name,
@@ -156,6 +165,15 @@ export default function ChatPage() {
   const [infoMessage, setInfoMessage] = useState<Message | null>(null)
   const [readerNames, setReaderNames] = useState<string[]>([])
   const [otherUserLastSeen, setOtherUserLastSeen] = useState<string | null>(null)
+  const [showGroupInfo, setShowGroupInfo] = useState(false)
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null)
+  const [editingContent, setEditingContent] = useState("")
+  const [mutedRoomIds, setMutedRoomIds] = useState<Set<string>>(new Set())
+  const [groupInfoName, setGroupInfoName] = useState("")
+  const [groupInfoDescription, setGroupInfoDescription] = useState("")
+  const [savingGroupInfo, setSavingGroupInfo] = useState(false)
+  const [addMemberQuery, setAddMemberQuery] = useState("")
+  const [addMemberResults, setAddMemberResults] = useState<SearchUser[]>([])
   const chatContainerRef = useRef<HTMLDivElement>(null)
 
   const supabase = createBrowserClient(
@@ -179,6 +197,7 @@ export default function ChatPage() {
     reply_to: msg.reply_to,
     reply_preview: msg.reply_message ? { content: msg.reply_message.content, message_type: msg.reply_message.message_type } : null,
     is_deleted: msg.is_deleted || false,
+    is_edited: msg.is_edited || false,
   })
 
   const getOtherUserId = useCallback(
@@ -295,6 +314,13 @@ export default function ChatPage() {
         setChatRooms(rooms)
         setFilteredRooms(rooms)
         await refreshRoomsMeta(rooms, user.id)
+
+        const { data: mutedRows } = await supabase
+          .from("group_members")
+          .select("group_id")
+          .eq("user_id", user.id)
+          .eq("is_muted", true)
+        setMutedRoomIds(new Set((mutedRows || []).map((r: any) => r.group_id)))
 
         if (rooms.length > 0) {
           setActiveRoom(rooms[0])
@@ -428,6 +454,7 @@ export default function ChatPage() {
       .select(
         `
         user_id,
+        role,
         profiles:user_id (
           first_name,
           last_name,
@@ -445,6 +472,7 @@ export default function ChatPage() {
         name: `${member.profiles?.first_name || ""} ${member.profiles?.last_name || ""}`.trim() || "Unknown",
         role: member.profiles?.arbiter_level || null,
         avatar_url: member.profiles?.avatar_url || null,
+        groupRole: member.role,
       }))
       setRoomMembers(members)
     }
@@ -698,6 +726,11 @@ export default function ChatPage() {
     e.preventDefault()
     if (!newMessage.trim() || !activeRoom || !currentUserId) return
 
+    if (editingMessageId) {
+      await handleSaveEdit()
+      return
+    }
+
     setSending(true)
 
     try {
@@ -717,6 +750,141 @@ export default function ChatPage() {
       console.error("[v0] Error sending message:", error)
     } finally {
       setSending(false)
+    }
+  }
+
+  const startEditMessage = (message: Message) => {
+    setEditingMessageId(message.id)
+    setEditingContent(message.content)
+    setNewMessage(message.content)
+    setReplyingTo(null)
+  }
+
+  const cancelEditMessage = () => {
+    setEditingMessageId(null)
+    setEditingContent("")
+    setNewMessage("")
+  }
+
+  async function handleSaveEdit() {
+    if (!editingMessageId || !newMessage.trim() || !currentUserId) return
+    setSending(true)
+    try {
+      const { error } = await supabase
+        .from("chat_messages")
+        .update({ content: newMessage.trim(), is_edited: true, edited_at: new Date().toISOString() })
+        .eq("id", editingMessageId)
+        .eq("sender_id", currentUserId)
+
+      if (error) throw error
+
+      setMessages((prev) =>
+        prev.map((m) => (m.id === editingMessageId ? { ...m, content: newMessage.trim(), is_edited: true } : m)),
+      )
+      cancelEditMessage()
+    } catch (error) {
+      console.error("[v0] Error editing message:", error)
+    } finally {
+      setSending(false)
+    }
+  }
+
+  const toggleMuteRoom = async (roomId: string) => {
+    const currentlyMuted = mutedRoomIds.has(roomId)
+    const { error } = await supabase.rpc("set_group_mute", { p_group_id: roomId, p_muted: !currentlyMuted })
+    if (error) {
+      console.error("[v0] Error toggling mute:", error)
+      return
+    }
+    setMutedRoomIds((prev) => {
+      const next = new Set(prev)
+      if (currentlyMuted) next.delete(roomId)
+      else next.add(roomId)
+      return next
+    })
+  }
+
+  const handleLeaveGroup = async () => {
+    if (!activeRoom || !currentUserId) return
+    const { error } = await supabase
+      .from("group_members")
+      .delete()
+      .eq("group_id", activeRoom.id)
+      .eq("user_id", currentUserId)
+
+    if (error) {
+      console.error("[v0] Error leaving group:", error)
+      return
+    }
+
+    setChatRooms((prev) => prev.filter((r) => r.id !== activeRoom.id))
+    setFilteredRooms((prev) => prev.filter((r) => r.id !== activeRoom.id))
+    setShowGroupInfo(false)
+    setActiveRoom(null)
+    setMessages([])
+    setRoomMembers([])
+  }
+
+  const handleRemoveMember = async (userId: string) => {
+    if (!activeRoom) return
+    const { error } = await supabase.from("group_members").delete().eq("group_id", activeRoom.id).eq("user_id", userId)
+    if (error) {
+      console.error("[v0] Error removing member:", error)
+      return
+    }
+    setRoomMembers((prev) => prev.filter((m) => m.id !== userId))
+  }
+
+  const searchUsersToAdd = async (query: string) => {
+    setAddMemberQuery(query)
+    if (!query.trim()) {
+      setAddMemberResults([])
+      return
+    }
+    const { data } = await supabase.rpc("search_users_for_dm", { p_search_query: query, p_limit: 10 })
+    if (data) {
+      setAddMemberResults(data.filter((u: SearchUser) => !roomMembers.some((m) => m.id === u.id)))
+    }
+  }
+
+  const handleAddMember = async (user: SearchUser) => {
+    if (!activeRoom) return
+    const { error } = await supabase.from("group_members").insert({ group_id: activeRoom.id, user_id: user.id, role: "member" })
+    if (error) {
+      console.error("[v0] Error adding member:", error)
+      return
+    }
+    setAddMemberQuery("")
+    setAddMemberResults([])
+    await fetchRoomMembers(activeRoom)
+  }
+
+  const openGroupInfo = () => {
+    if (!activeRoom) return
+    setGroupInfoName(activeRoom.name)
+    setGroupInfoDescription(activeRoom.description || "")
+    setShowGroupInfo(true)
+  }
+
+  const handleSaveGroupInfo = async () => {
+    if (!activeRoom || !groupInfoName.trim()) return
+    setSavingGroupInfo(true)
+    try {
+      const { error } = await supabase
+        .from("chat_rooms")
+        .update({ name: groupInfoName.trim(), description: groupInfoDescription.trim() || null })
+        .eq("id", activeRoom.id)
+
+      if (error) throw error
+
+      const updated = { ...activeRoom, name: groupInfoName.trim(), description: groupInfoDescription.trim() || null }
+      setActiveRoom(updated)
+      setChatRooms((prev) => prev.map((r) => (r.id === activeRoom.id ? updated : r)))
+      setFilteredRooms((prev) => prev.map((r) => (r.id === activeRoom.id ? updated : r)))
+    } catch (error) {
+      console.error("[v0] Error saving group info:", error)
+    } finally {
+      setSavingGroupInfo(false)
     }
   }
 
@@ -999,12 +1167,15 @@ export default function ChatPage() {
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-2">
-                        <p className="font-medium truncate">{room.name}</p>
+                        <p className="font-medium truncate flex items-center gap-1">
+                          {room.name}
+                          {mutedRoomIds.has(room.id) && <BellOff className="w-3 h-3 text-muted-foreground shrink-0" />}
+                        </p>
                         {room.lastMessageAt && <span className="text-xs text-muted-foreground shrink-0">{formatTime(room.lastMessageAt)}</span>}
                       </div>
                       <div className="flex items-center justify-between gap-2">
                         <p className="text-xs text-muted-foreground truncate">{room.lastMessage || room.description || "No messages yet"}</p>
-                        {unreadCounts[room.id] > 0 && (
+                        {unreadCounts[room.id] > 0 && !mutedRoomIds.has(room.id) && (
                           <Badge variant="destructive" className="text-xs shrink-0">
                             {unreadCounts[room.id]}
                           </Badge>
@@ -1054,9 +1225,25 @@ export default function ChatPage() {
                   </Button>
                 </>
               )}
-              <Button variant="ghost" size="icon">
-                <MoreVertical className="w-4 h-4" />
-              </Button>
+              {activeRoom && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => toggleMuteRoom(activeRoom.id)}
+                  title={mutedRoomIds.has(activeRoom.id) ? "Unmute" : "Mute"}
+                >
+                  {mutedRoomIds.has(activeRoom.id) ? <BellOff className="w-4 h-4" /> : <Bell className="w-4 h-4" />}
+                </Button>
+              )}
+              {activeRoom && !activeRoom.is_direct_message ? (
+                <Button variant="ghost" size="icon" onClick={openGroupInfo} title="Group info">
+                  <Settings className="w-4 h-4" />
+                </Button>
+              ) : (
+                <Button variant="ghost" size="icon">
+                  <MoreVertical className="w-4 h-4" />
+                </Button>
+              )}
             </div>
           </div>
 
@@ -1142,6 +1329,11 @@ export default function ChatPage() {
                                 <Info className="w-3.5 h-3.5" />
                               </Button>
                             )}
+                            {isOwn && !message.is_deleted && message.message_type === "text" && (
+                              <Button variant="ghost" size="icon" className="w-6 h-6" onClick={() => startEditMessage(message)} title="Edit">
+                                <Pencil className="w-3.5 h-3.5" />
+                              </Button>
+                            )}
                             {isOwn && !message.is_deleted && (
                               <Button variant="ghost" size="icon" className="w-6 h-6" onClick={() => handleDeleteMessage(message.id)} title="Delete">
                                 <Trash2 className="w-3.5 h-3.5" />
@@ -1151,6 +1343,7 @@ export default function ChatPage() {
                         </div>
 
                         <div className={`flex items-center gap-1 mt-0.5 ${isOwn ? "justify-end" : ""}`}>
+                          {message.is_edited && !message.is_deleted && <span className="text-xs text-muted-foreground">(edited)</span>}
                           <span className="text-xs text-muted-foreground">{formatTime(message.created_at)}</span>
                           {isOwn && !message.is_deleted && (
                             isRead ? (
@@ -1200,15 +1393,27 @@ export default function ChatPage() {
             </div>
           )}
 
-          {replyingTo && (
+          {editingMessageId ? (
             <div className="px-4 py-2 border-t bg-muted/50 flex items-center justify-between shrink-0">
               <div className="text-xs text-muted-foreground truncate">
-                Replying to <span className="font-medium">{replyingTo.sender_name}</span>: {replyingTo.message_type === "text" ? replyingTo.content : `[${replyingTo.message_type}]`}
+                <Pencil className="w-3 h-3 inline mr-1" />
+                Editing message
               </div>
-              <Button variant="ghost" size="icon" className="w-6 h-6 shrink-0" onClick={() => setReplyingTo(null)}>
+              <Button variant="ghost" size="icon" className="w-6 h-6 shrink-0" onClick={cancelEditMessage}>
                 <X className="w-4 h-4" />
               </Button>
             </div>
+          ) : (
+            replyingTo && (
+              <div className="px-4 py-2 border-t bg-muted/50 flex items-center justify-between shrink-0">
+                <div className="text-xs text-muted-foreground truncate">
+                  Replying to <span className="font-medium">{replyingTo.sender_name}</span>: {replyingTo.message_type === "text" ? replyingTo.content : `[${replyingTo.message_type}]`}
+                </div>
+                <Button variant="ghost" size="icon" className="w-6 h-6 shrink-0" onClick={() => setReplyingTo(null)}>
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
+            )
           )}
 
           <form onSubmit={handleSendMessage} className="p-4 border-t shrink-0">
@@ -1292,6 +1497,106 @@ export default function ChatPage() {
                 </ul>
               )}
             </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showGroupInfo} onOpenChange={setShowGroupInfo}>
+        <DialogContent className="max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Group Info</DialogTitle>
+            <DialogDescription>{roomMembers.length} members</DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            {(() => {
+              const canEditDetails = isSuperadmin && activeRoom?.created_by === currentUserId
+              const canManageMembers = isSuperadmin
+              return (
+                <>
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium text-muted-foreground">Group Name</p>
+                    {canEditDetails ? (
+                      <Input value={groupInfoName} onChange={(e) => setGroupInfoName(e.target.value)} />
+                    ) : (
+                      <p className="text-sm">{activeRoom?.name}</p>
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium text-muted-foreground">Description</p>
+                    {canEditDetails ? (
+                      <Input
+                        value={groupInfoDescription}
+                        onChange={(e) => setGroupInfoDescription(e.target.value)}
+                        placeholder="Add a description..."
+                      />
+                    ) : (
+                      <p className="text-sm text-muted-foreground">{activeRoom?.description || "No description"}</p>
+                    )}
+                  </div>
+
+                  {canEditDetails && (
+                    <Button size="sm" onClick={handleSaveGroupInfo} disabled={savingGroupInfo || !groupInfoName.trim()}>
+                      {savingGroupInfo && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                      Save Changes
+                    </Button>
+                  )}
+
+                  <div className="space-y-2 pt-2 border-t">
+                    <p className="text-xs font-medium text-muted-foreground">Members</p>
+                    <div className="space-y-1 max-h-48 overflow-y-auto">
+                      {roomMembers.map((member) => (
+                        <div key={member.id} className="flex items-center justify-between gap-2 py-1">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <Avatar className="w-7 h-7">
+                              <AvatarImage src={member.avatar_url || ""} alt={member.name} />
+                              <AvatarFallback>{member.name[0]}</AvatarFallback>
+                            </Avatar>
+                            <div className="min-w-0">
+                              <p className="text-sm truncate">{member.name}</p>
+                              {member.groupRole === "admin" && <p className="text-xs text-muted-foreground">Admin</p>}
+                            </div>
+                          </div>
+                          {canManageMembers && member.id !== currentUserId && (
+                            <Button variant="ghost" size="icon" className="w-7 h-7 shrink-0" onClick={() => handleRemoveMember(member.id)} title="Remove">
+                              <UserMinus className="w-4 h-4" />
+                            </Button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {canManageMembers && (
+                    <div className="space-y-2">
+                      <Input placeholder="Add member by FIDE ID..." value={addMemberQuery} onChange={(e) => searchUsersToAdd(e.target.value)} />
+                      {addMemberResults.length > 0 && (
+                        <div className="space-y-1 max-h-32 overflow-y-auto">
+                          {addMemberResults.map((user) => (
+                            <button key={user.id} onClick={() => handleAddMember(user)} className="w-full flex items-center gap-2 p-2 rounded hover:bg-muted/70 text-left">
+                              <Avatar className="w-6 h-6">
+                                <AvatarImage src={user.avatar_url || ""} alt={user.name} />
+                                <AvatarFallback>{user.name[0]}</AvatarFallback>
+                              </Avatar>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium truncate">{user.name}</p>
+                                <p className="text-xs text-muted-foreground truncate">FIDE ID: {user.fide_id}</p>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <Button variant="outline" className="w-full text-destructive" onClick={handleLeaveGroup}>
+                    <LogOut className="w-4 h-4 mr-2" />
+                    Leave Group
+                  </Button>
+                </>
+              )
+            })()}
           </div>
         </DialogContent>
       </Dialog>
