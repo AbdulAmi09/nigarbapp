@@ -48,8 +48,8 @@ export default function EventsPage() {
       const formattedEvents: Event[] = (data || []).map((event: any) => ({
         id: event.id,
         title: event.title,
-        type: event.event_type || "event",
-        category: event.event_type || "general",
+        type: event.event_type || "Event",
+        category: event.event_type || "General",
         date: formatDateRange(event.start_date, event.end_date),
         location: [event.venue, event.city, event.state].filter(Boolean).join(", ") || "TBD",
         organizer: "NCAA",
@@ -113,15 +113,16 @@ export default function EventsPage() {
 
   const getTypeColor = (type: string) => {
     switch (type) {
-      case "tournament":
+      case "Tournament":
         return "bg-primary/10 text-primary"
-      case "training":
-      case "seminar":
+      case "Training":
         return "bg-blue-500/10 text-blue-600"
-      case "workshop":
+      case "Workshop":
         return "bg-green-500/10 text-green-600"
-      case "conference":
+      case "Conference":
         return "bg-purple-500/10 text-purple-600"
+      case "Meeting":
+        return "bg-orange-500/10 text-orange-600"
       default:
         return "bg-gray-500/10 text-gray-600"
     }
@@ -178,7 +179,7 @@ export default function EventsPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-muted-foreground">Tournaments</p>
-                <p className="text-2xl font-bold">{events.filter((e) => e.type === "tournament").length}</p>
+                <p className="text-2xl font-bold">{events.filter((e) => e.type === "Tournament").length}</p>
               </div>
               <Trophy className="h-8 w-8 text-muted-foreground" />
             </div>
@@ -191,7 +192,7 @@ export default function EventsPage() {
               <div>
                 <p className="text-sm font-medium text-muted-foreground">Training Programs</p>
                 <p className="text-2xl font-bold">
-                  {events.filter((e) => e.type === "training" || e.type === "seminar").length}
+                  {events.filter((e) => e.type === "Training").length}
                 </p>
               </div>
               <Star className="h-8 w-8 text-muted-foreground" />
@@ -234,11 +235,11 @@ export default function EventsPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Types</SelectItem>
-                  <SelectItem value="tournament">Tournament</SelectItem>
-                  <SelectItem value="training">Training</SelectItem>
-                  <SelectItem value="seminar">Seminar</SelectItem>
-                  <SelectItem value="workshop">Workshop</SelectItem>
-                  <SelectItem value="conference">Conference</SelectItem>
+                  <SelectItem value="Tournament">Tournament</SelectItem>
+                  <SelectItem value="Training">Training</SelectItem>
+                  <SelectItem value="Workshop">Workshop</SelectItem>
+                  <SelectItem value="Conference">Conference</SelectItem>
+                  <SelectItem value="Meeting">Meeting</SelectItem>
                 </SelectContent>
               </Select>
               <Select value={statusFilter} onValueChange={setStatusFilter}>
@@ -362,7 +363,7 @@ export default function EventsPage() {
 
         <TabsContent value="tournaments" className="space-y-4">
           <div className="space-y-4">
-            {filteredEvents.filter((e) => e.type === "tournament").length === 0 ? (
+            {filteredEvents.filter((e) => e.type === "Tournament").length === 0 ? (
               <Card>
                 <CardContent className="pt-6">
                   <p className="text-center text-muted-foreground py-8">No tournaments found</p>
@@ -370,7 +371,7 @@ export default function EventsPage() {
               </Card>
             ) : (
               filteredEvents
-                .filter((e) => e.type === "tournament")
+                .filter((e) => e.type === "Tournament")
                 .map((event) => (
                   <Card key={event.id}>
                     <CardContent className="pt-6">
@@ -441,7 +442,7 @@ export default function EventsPage() {
 
         <TabsContent value="training" className="space-y-4">
           <div className="space-y-4">
-            {filteredEvents.filter((e) => e.type === "training" || e.type === "seminar" || e.type === "workshop")
+            {filteredEvents.filter((e) => e.type === "Training" || e.type === "Workshop")
               .length === 0 ? (
               <Card>
                 <CardContent className="pt-6">
@@ -450,7 +451,7 @@ export default function EventsPage() {
               </Card>
             ) : (
               filteredEvents
-                .filter((e) => e.type === "training" || e.type === "seminar" || e.type === "workshop")
+                .filter((e) => e.type === "Training" || e.type === "Workshop")
                 .map((event) => (
                   <Card key={event.id}>
                     <CardContent className="pt-6">

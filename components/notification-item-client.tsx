@@ -3,7 +3,6 @@
 import type React from "react"
 
 import { Button } from "@/components/ui/button"
-import { createBrowserClient } from "@supabase/ssr"
 import { useRouter } from "next/navigation"
 import { useState } from "react"
 import { Loader2, Trophy, CreditCard, Settings, Users, Calendar, MessageSquare, Bell } from "lucide-react"
@@ -29,11 +28,7 @@ export default function NotificationItemClient({ notification }: NotificationIte
   const router = useRouter()
   const [loading, setLoading] = useState(false)
   const [actionCompleted, setActionCompleted] = useState(false)
-
-  const supabase = createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-  )
+  const [error, setError] = useState<string | null>(null)
 
   const getTypeColor = (type: string) => {
     switch (type?.toLowerCase()) {
@@ -84,43 +79,34 @@ export default function NotificationItemClient({ notification }: NotificationIte
     return `${Math.floor(diffInHours / 24)} days ago`
   }
 
-  const handleAccept = async () => {
+  const respondToAssignment = async (status: "Accepted" | "Declined") => {
+    if (notification.action_type !== "Tournament_assignment" || !notification.related_id) return
     setLoading(true)
+    setError(null)
     try {
-      if (notification.action_type === "Tournament_assignment" && notification.related_id) {
-        await supabase
-          .from("tournament_assignments")
-          .update({ assignment_status: "Accepted" })
-          .eq("id", notification.related_id)
-
-        setActionCompleted(true)
-        router.refresh()
+      const response = await fetch("/api/assignments/update-status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assignmentId: notification.related_id, status }),
+      })
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        console.error("[v0] Failed to update assignment status:", data.error)
+        setError(data.error || "Couldn't update this assignment. Please try again.")
+        return
       }
-    } catch (error) {
-      console.error("[v0] Error accepting assignment:", error)
+      setActionCompleted(true)
+      router.refresh()
+    } catch (err) {
+      console.error("[v0] Error responding to assignment:", err)
+      setError("Couldn't reach the server. Please try again.")
     } finally {
       setLoading(false)
     }
   }
 
-  const handleDecline = async () => {
-    setLoading(true)
-    try {
-      if (notification.action_type === "Tournament_assignment" && notification.related_id) {
-        await supabase
-          .from("tournament_assignments")
-          .update({ assignment_status: "Declined" })
-          .eq("id", notification.related_id)
-
-        setActionCompleted(true)
-        router.refresh()
-      }
-    } catch (error) {
-      console.error("[v0] Error declining assignment:", error)
-    } finally {
-      setLoading(false)
-    }
-  }
+  const handleAccept = () => respondToAssignment("Accepted")
+  const handleDecline = () => respondToAssignment("Declined")
 
   const handleNavigateUrl = () => {
     if (notification.action_url) {
@@ -167,6 +153,7 @@ export default function NotificationItemClient({ notification }: NotificationIte
               </Button>
             ) : null}
             {actionCompleted && <span className="text-xs text-green-600">Action completed</span>}
+            {error && <span className="text-xs text-destructive">{error}</span>}
           </div>
         )}
       </div>

@@ -168,11 +168,8 @@ export default function ResourcesPage() {
   })
 
   const handleDownload = async (resource: Resource) => {
-    // Increment download count
-    await supabase
-      .from("resources")
-      .update({ download_count: resource.downloads + 1 })
-      .eq("id", resource.id)
+    // Increment download count (RPC bypasses the author-only RLS restriction)
+    await supabase.rpc("increment_resource_downloads", { p_resource_id: resource.id })
 
     // Open download URL
     if (resource.url && resource.url !== "#") {

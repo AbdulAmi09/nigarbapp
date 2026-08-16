@@ -126,7 +126,7 @@ export default function CommitteePage() {
       const { data: eventsData } = await supabase
         .from("events")
         .select("*")
-        .eq("event_type", "meeting")
+        .eq("event_type", "Meeting")
         .gte("start_date", new Date().toISOString())
         .order("start_date")
         .limit(5)

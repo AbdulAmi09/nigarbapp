@@ -95,7 +95,7 @@ export default function CalendarPage() {
           calendarEvents.push({
             id: event.id,
             title: event.title,
-            type: event.event_type || "event",
+            type: event.event_type || "Event",
             date: new Date(event.start_date).toLocaleDateString("en-US", {
               month: "short",
               day: "numeric",
@@ -124,13 +124,14 @@ export default function CalendarPage() {
     switch (type) {
       case "tournament":
         return "bg-primary/10 text-primary border-primary/20"
-      case "meeting":
+      case "Meeting":
         return "bg-blue-500/10 text-blue-600 border-blue-500/20"
-      case "training":
-      case "seminar":
+      case "Training":
         return "bg-green-500/10 text-green-600 border-green-500/20"
-      case "workshop":
+      case "Workshop":
         return "bg-purple-500/10 text-purple-600 border-purple-500/20"
+      case "Conference":
+        return "bg-orange-500/10 text-orange-600 border-orange-500/20"
       default:
         return "bg-gray-500/10 text-gray-600 border-gray-500/20"
     }
@@ -251,7 +252,7 @@ export default function CalendarPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-muted-foreground">Meetings</p>
-                <p className="text-2xl font-bold">{events.filter((e) => e.type === "meeting").length}</p>
+                <p className="text-2xl font-bold">{events.filter((e) => e.type === "Meeting").length}</p>
               </div>
               <Users className="h-8 w-8 text-muted-foreground" />
             </div>
@@ -264,7 +265,7 @@ export default function CalendarPage() {
               <div>
                 <p className="text-sm font-medium text-muted-foreground">Training</p>
                 <p className="text-2xl font-bold">
-                  {events.filter((e) => e.type === "training" || e.type === "seminar").length}
+                  {events.filter((e) => e.type === "Training").length}
                 </p>
               </div>
               <Clock className="h-8 w-8 text-muted-foreground" />
@@ -345,11 +346,9 @@ export default function CalendarPage() {
                     <div className="flex items-center gap-4">
                       <div className="w-12 h-12 bg-primary/10 rounded-lg flex items-center justify-center">
                         {event.type === "tournament" && <Trophy className="w-6 h-6 text-primary" />}
-                        {event.type === "meeting" && <Users className="w-6 h-6 text-blue-600" />}
-                        {(event.type === "training" || event.type === "seminar") && (
-                          <Clock className="w-6 h-6 text-green-600" />
-                        )}
-                        {!["tournament", "meeting", "training", "seminar"].includes(event.type) && (
+                        {event.type === "Meeting" && <Users className="w-6 h-6 text-blue-600" />}
+                        {event.type === "Training" && <Clock className="w-6 h-6 text-green-600" />}
+                        {!["tournament", "Meeting", "Training", "Workshop", "Conference"].includes(event.type) && (
                           <Calendar className="w-6 h-6 text-primary" />
                         )}
                       </div>

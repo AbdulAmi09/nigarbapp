@@ -90,7 +90,7 @@ export default function PaymentDialog({ open, onOpenChange, userEmail, onPayment
       // Upload receipt to storage
       const fileName = `${user.id}/${Date.now()}-${receipt.name}`
       const { data: uploadData, error: uploadError } = await supabase.storage
-        .from("payment-receipts")
+        .from("receipts")
         .upload(fileName, receipt)
 
       if (uploadError) throw uploadError

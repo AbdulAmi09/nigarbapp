@@ -189,12 +189,32 @@ export default function TournamentEvaluationPage() {
 
     const { data: evaluationsData } = await supabase
       .from("tournament_evaluations")
-      .select("*")
+      .select(`
+        id,
+        tournament_id,
+        overall_rating,
+        submitted_at,
+        tournaments (
+          name,
+          city,
+          start_date
+        )
+      `)
       .eq("evaluator_id", user.id)
-      .order("created_at", { ascending: false })
+      .order("submitted_at", { ascending: false })
 
     if (evaluationsData) {
-      setEvaluations(evaluationsData)
+      setEvaluations(
+        evaluationsData.map((e: any) => ({
+          id: e.id,
+          tournament_id: e.tournament_id,
+          tournament_name: e.tournaments?.name,
+          overall_rating: e.overall_rating,
+          start_date: e.tournaments?.start_date,
+          city: e.tournaments?.city,
+          created_at: e.submitted_at,
+        })),
+      )
     }
   }
 
