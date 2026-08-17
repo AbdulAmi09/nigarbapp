@@ -5,20 +5,24 @@ import type React from "react"
 import { createContext, useContext, useEffect, useRef, useState } from "react"
 import { createClient } from "@/lib/supabase/client"
 import type { RealtimeChannel } from "@supabase/supabase-js"
-import { isPushSupported, subscribeToPush } from "@/lib/push"
+import { isPushSubscribed, isPushSupported, subscribeToPush, unsubscribeFromPush } from "@/lib/push"
 
 interface PresenceContextValue {
   onlineIds: Set<string>
   pushSupported: boolean
   pushPermission: NotificationPermission | null
+  pushSubscribed: boolean
   enablePush: () => Promise<boolean>
+  disablePush: () => Promise<void>
 }
 
 const PresenceContext = createContext<PresenceContextValue>({
   onlineIds: new Set(),
   pushSupported: false,
   pushPermission: null,
+  pushSubscribed: false,
   enablePush: async () => false,
+  disablePush: async () => {},
 })
 
 export function useOnlinePresence() {
@@ -29,18 +33,27 @@ export default function PresenceProvider({ children }: { children: React.ReactNo
   const supabase = createClient()
   const [onlineIds, setOnlineIds] = useState<Set<string>>(new Set())
   const [pushPermission, setPushPermission] = useState<NotificationPermission | null>(null)
+  const [pushSubscribed, setPushSubscribed] = useState(false)
   const channelRef = useRef<RealtimeChannel | null>(null)
   const userIdRef = useRef<string | null>(null)
   const pushSupported = isPushSupported()
 
   useEffect(() => {
-    if (pushSupported) setPushPermission(Notification.permission)
+    if (!pushSupported) return
+    setPushPermission(Notification.permission)
+    isPushSubscribed().then(setPushSubscribed)
   }, [pushSupported])
 
   const enablePush = async () => {
     const ok = await subscribeToPush(supabase)
     if (pushSupported) setPushPermission(Notification.permission)
+    setPushSubscribed(ok)
     return ok
+  }
+
+  const disablePush = async () => {
+    await unsubscribeFromPush(supabase)
+    setPushSubscribed(false)
   }
 
   useEffect(() => {
@@ -83,7 +96,9 @@ export default function PresenceProvider({ children }: { children: React.ReactNo
   }, [])
 
   return (
-    <PresenceContext.Provider value={{ onlineIds, pushSupported, pushPermission, enablePush }}>
+    <PresenceContext.Provider
+      value={{ onlineIds, pushSupported, pushPermission, pushSubscribed, enablePush, disablePush }}
+    >
       {children}
     </PresenceContext.Provider>
   )

@@ -12,12 +12,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Separator } from "@/components/ui/separator"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Bell, Shield, User, Globe, Lock, Camera, Loader2, Check } from "lucide-react"
+import { Bell, Shield, User, Globe, Lock, Camera, Loader2, Check, Eye, EyeOff } from "lucide-react"
 import { createBrowserClient } from "@supabase/ssr"
 import { useRouter } from "next/navigation"
 import { useEffect, useState, useRef } from "react"
 import { useTheme } from "next-themes"
 import MfaSettings from "@/components/mfa-settings"
+import { useOnlinePresence } from "@/components/presence-provider"
 
 interface Profile {
   id: string
@@ -40,6 +41,7 @@ interface Profile {
 export default function SettingsPage() {
   const router = useRouter()
   const { theme, setTheme } = useTheme()
+  const { pushSupported, pushSubscribed, enablePush, disablePush } = useOnlinePresence()
   const [profile, setProfile] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -50,11 +52,9 @@ export default function SettingsPage() {
 
   // Notification preferences state
   const [emailNotifications, setEmailNotifications] = useState(true)
-  const [pushNotifications, setPushNotifications] = useState(true)
-  const [tournamentAlerts, setTournamentAlerts] = useState(true)
-  const [paymentReminders, setPaymentReminders] = useState(true)
   const [savingNotifications, setSavingNotifications] = useState(false)
   const [notificationsSaved, setNotificationsSaved] = useState(false)
+  const [pushToggling, setPushToggling] = useState(false)
 
   // Password change state
   const [currentPassword, setCurrentPassword] = useState("")
@@ -63,6 +63,8 @@ export default function SettingsPage() {
   const [passwordError, setPasswordError] = useState<string | null>(null)
   const [passwordSaving, setPasswordSaving] = useState(false)
   const [passwordSaved, setPasswordSaved] = useState(false)
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false)
+  const [showNewPassword, setShowNewPassword] = useState(false)
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -94,9 +96,6 @@ export default function SettingsPage() {
 
       if (prefs) {
         setEmailNotifications(prefs.email_notifications)
-        setPushNotifications(prefs.push_notifications)
-        setTournamentAlerts(prefs.tournament_alerts)
-        setPaymentReminders(prefs.payment_reminders)
       }
 
       setLoading(false)
@@ -111,12 +110,14 @@ export default function SettingsPage() {
     setNotificationsSaved(false)
 
     try {
+      // tournament_alerts/payment_reminders are always on -- they're just
+      // the in-app notification feed, not a separate opt-in channel.
       const { error } = await supabase.from("notification_preferences").upsert({
         user_id: profile.id,
         email_notifications: emailNotifications,
-        push_notifications: pushNotifications,
-        tournament_alerts: tournamentAlerts,
-        payment_reminders: paymentReminders,
+        push_notifications: pushSubscribed,
+        tournament_alerts: true,
+        payment_reminders: true,
         updated_at: new Date().toISOString(),
       })
 
@@ -128,6 +129,16 @@ export default function SettingsPage() {
       console.error("Error saving notification preferences:", error)
     } finally {
       setSavingNotifications(false)
+    }
+  }
+
+  async function handleTogglePush(enable: boolean) {
+    setPushToggling(true)
+    try {
+      if (enable) await enablePush()
+      else await disablePush()
+    } finally {
+      setPushToggling(false)
     }
   }
 
@@ -179,6 +190,7 @@ export default function SettingsPage() {
     setUploading(true)
 
     try {
+      const previousUrl = profile.avatar_url
       const fileExt = file.name.split(".").pop()
       const fileName = `${profile.id}-${Date.now()}.${fileExt}`
       const filePath = `avatars/${fileName}`
@@ -186,6 +198,13 @@ export default function SettingsPage() {
       const { error: uploadError } = await supabase.storage.from("avatars").upload(filePath, file, { upsert: true })
 
       if (uploadError) throw uploadError
+
+      if (previousUrl) {
+        const marker = "/object/public/avatars/"
+        const markerIndex = previousUrl.indexOf(marker)
+        const oldPath = markerIndex !== -1 ? previousUrl.slice(markerIndex + marker.length) : null
+        if (oldPath) await supabase.storage.from("avatars").remove([oldPath])
+      }
 
       const {
         data: { publicUrl },
@@ -269,12 +288,11 @@ export default function SettingsPage() {
       </div>
 
       <Tabs defaultValue="profile" className="space-y-4">
-        <TabsList className="grid w-full grid-cols-5">
+        <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="profile">Profile</TabsTrigger>
           <TabsTrigger value="notifications">Notifications</TabsTrigger>
           <TabsTrigger value="security">Security</TabsTrigger>
           <TabsTrigger value="preferences">Preferences</TabsTrigger>
-          <TabsTrigger value="privacy">Privacy</TabsTrigger>
         </TabsList>
 
         <TabsContent value="profile" className="space-y-4">
@@ -363,8 +381,11 @@ export default function SettingsPage() {
 
               <div className="space-y-2">
                 <Label htmlFor="phone">Phone Number</Label>
-                <Input id="phone" value={profile.phone || ""} disabled className="bg-muted cursor-not-allowed" />
-                <p className="text-xs text-muted-foreground">This field is readonly and cannot be modified here</p>
+                <Input
+                  id="phone"
+                  value={profile.phone || ""}
+                  onChange={(e) => setProfile({ ...profile, phone: e.target.value })}
+                />
               </div>
 
               <div className="space-y-2">
@@ -393,31 +414,61 @@ export default function SettingsPage() {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="city">City</Label>
-                  <Input id="city" value={profile.city || ""} disabled className="bg-muted cursor-not-allowed" />
-                  <p className="text-xs text-muted-foreground">Readonly</p>
+                  <Input
+                    id="city"
+                    value={profile.city || ""}
+                    onChange={(e) => setProfile({ ...profile, city: e.target.value })}
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="state">State</Label>
-                  <Input id="state" value={profile.state || ""} disabled className="bg-muted cursor-not-allowed" />
-                  <p className="text-xs text-muted-foreground">Readonly</p>
+                  <Input
+                    id="state"
+                    value={profile.state || ""}
+                    onChange={(e) => setProfile({ ...profile, state: e.target.value })}
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="country">Country</Label>
                   <Input
                     id="country"
                     value={profile.country || "Nigeria"}
-                    disabled
-                    className="bg-muted cursor-not-allowed"
+                    onChange={(e) => setProfile({ ...profile, country: e.target.value })}
                   />
-                  <p className="text-xs text-muted-foreground">Readonly</p>
                 </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="zone">Zone</Label>
-                  <Input id="zone" value={profile.zone || ""} disabled className="bg-muted cursor-not-allowed" />
-                  <p className="text-xs text-muted-foreground">Readonly</p>
+                  <Select value={profile.zone || ""} onValueChange={(v) => setProfile({ ...profile, zone: v })}>
+                    <SelectTrigger id="zone">
+                      <SelectValue placeholder="Select zone" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {[
+                        "North",
+                        "South",
+                        "East",
+                        "West",
+                        "Central",
+                        "FCT",
+                        "North Central",
+                        "North East",
+                        "North West",
+                        "South East",
+                        "South South",
+                        "South West",
+                      ].map((z) => (
+                        <SelectItem key={z} value={z}>
+                          {z}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    The zone you're available to take assignments in -- doesn't have to match where you live.
+                  </p>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="title">Arbiter Title</Label>
@@ -427,7 +478,7 @@ export default function SettingsPage() {
                     disabled
                     className="bg-muted cursor-not-allowed"
                   />
-                  <p className="text-xs text-muted-foreground">Readonly</p>
+                  <p className="text-xs text-muted-foreground">Set by an administrator</p>
                 </div>
               </div>
 
@@ -441,7 +492,7 @@ export default function SettingsPage() {
                     disabled
                     className="bg-muted cursor-not-allowed"
                   />
-                  <p className="text-xs text-muted-foreground">Readonly</p>
+                  <p className="text-xs text-muted-foreground">Set by an administrator</p>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="license">License Number</Label>
@@ -451,7 +502,7 @@ export default function SettingsPage() {
                     disabled
                     className="bg-muted cursor-not-allowed"
                   />
-                  <p className="text-xs text-muted-foreground">Readonly</p>
+                  <p className="text-xs text-muted-foreground">Set by an administrator</p>
                 </div>
               </div>
 
@@ -487,10 +538,18 @@ export default function SettingsPage() {
               <CardDescription>Manage how you receive notifications and alerts.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
+              <p className="text-sm text-muted-foreground">
+                Assignment updates, payment reminders, and other announcements always appear in your{" "}
+                <a href="/dashboard/notifications" className="underline">
+                  in-app notifications
+                </a>
+                . The switches below control whether you're <em>also</em> notified by email or a browser push
+                notification.
+              </p>
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
                   <Label>Email Notifications</Label>
-                  <p className="text-sm text-muted-foreground">Receive notifications via email</p>
+                  <p className="text-sm text-muted-foreground">Also send a copy to {profile.email}</p>
                 </div>
                 <Switch checked={emailNotifications} onCheckedChange={setEmailNotifications} />
               </div>
@@ -498,25 +557,17 @@ export default function SettingsPage() {
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
                   <Label>Push Notifications</Label>
-                  <p className="text-sm text-muted-foreground">Receive push notifications in browser</p>
+                  <p className="text-sm text-muted-foreground">
+                    {pushSupported
+                      ? "Get a browser notification on this device"
+                      : "Not supported in this browser"}
+                  </p>
                 </div>
-                <Switch checked={pushNotifications} onCheckedChange={setPushNotifications} />
-              </div>
-              <Separator />
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label>Tournament Alerts</Label>
-                  <p className="text-sm text-muted-foreground">Get notified about new tournament assignments</p>
-                </div>
-                <Switch checked={tournamentAlerts} onCheckedChange={setTournamentAlerts} />
-              </div>
-              <Separator />
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label>Payment Reminders</Label>
-                  <p className="text-sm text-muted-foreground">Receive reminders for pending payments</p>
-                </div>
-                <Switch checked={paymentReminders} onCheckedChange={setPaymentReminders} />
+                <Switch
+                  checked={pushSubscribed}
+                  disabled={!pushSupported || pushToggling}
+                  onCheckedChange={handleTogglePush}
+                />
               </div>
               <div className="flex justify-end">
                 <Button onClick={handleSaveNotifications} disabled={savingNotifications}>
@@ -551,27 +602,49 @@ export default function SettingsPage() {
             <CardContent className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="currentPassword">Current Password</Label>
-                <Input
-                  id="currentPassword"
-                  type="password"
-                  value={currentPassword}
-                  onChange={(e) => setCurrentPassword(e.target.value)}
-                />
+                <div className="relative">
+                  <Input
+                    id="currentPassword"
+                    type={showCurrentPassword ? "text" : "password"}
+                    value={currentPassword}
+                    onChange={(e) => setCurrentPassword(e.target.value)}
+                    className="pr-10"
+                  />
+                  <button
+                    type="button"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+                    onClick={() => setShowCurrentPassword((v) => !v)}
+                    tabIndex={-1}
+                  >
+                    {showCurrentPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="newPassword">New Password</Label>
-                <Input
-                  id="newPassword"
-                  type="password"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                />
+                <div className="relative">
+                  <Input
+                    id="newPassword"
+                    type={showNewPassword ? "text" : "password"}
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    className="pr-10"
+                  />
+                  <button
+                    type="button"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+                    onClick={() => setShowNewPassword((v) => !v)}
+                    tabIndex={-1}
+                  >
+                    {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="confirmPassword">Confirm New Password</Label>
                 <Input
                   id="confirmPassword"
-                  type="password"
+                  type={showNewPassword ? "text" : "password"}
                   value={confirmNewPassword}
                   onChange={(e) => setConfirmNewPassword(e.target.value)}
                 />
@@ -640,42 +713,6 @@ export default function SettingsPage() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="privacy" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Shield className="w-5 h-5" />
-                Privacy Settings
-              </CardTitle>
-              <CardDescription>Control your privacy and data sharing preferences.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label>Profile Visibility</Label>
-                  <p className="text-sm text-muted-foreground">Allow other arbiters to view your profile</p>
-                </div>
-                <Switch defaultChecked />
-              </div>
-              <Separator />
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label>Show Online Status</Label>
-                  <p className="text-sm text-muted-foreground">Let others see when you're online</p>
-                </div>
-                <Switch defaultChecked />
-              </div>
-              <Separator />
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label>Share Performance Stats</Label>
-                  <p className="text-sm text-muted-foreground">Display your ratings and statistics publicly</p>
-                </div>
-                <Switch />
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
       </Tabs>
     </div>
   )

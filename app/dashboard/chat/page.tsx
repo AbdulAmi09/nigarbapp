@@ -248,7 +248,7 @@ function VoiceBubble({ url, isOwn }: { url: string; isOwn: boolean }) {
 export default function ChatPage() {
   const router = useRouter()
   const { startCall } = useCall()
-  const { onlineIds, pushSupported, pushPermission, enablePush } = useOnlinePresence()
+  const { onlineIds, pushSupported, pushSubscribed, enablePush } = useOnlinePresence()
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
@@ -1601,7 +1601,7 @@ export default function ChatPage() {
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold">Chats</h2>
               <div className="flex items-center">
-                {pushSupported && pushPermission !== "granted" && (
+                {pushSupported && !pushSubscribed && (
                   <Button variant="ghost" size="icon" onClick={() => enablePush()} title="Enable message notifications">
                     <BellRing className="w-4 h-4" />
                   </Button>

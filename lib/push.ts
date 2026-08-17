@@ -40,3 +40,22 @@ export async function subscribeToPush(supabase: SupabaseClient) {
 
   return !error
 }
+
+export async function isPushSubscribed() {
+  if (!isPushSupported()) return false
+  const registration = await navigator.serviceWorker.getRegistration("/sw.js")
+  const subscription = await registration?.pushManager.getSubscription()
+  return !!subscription
+}
+
+export async function unsubscribeFromPush(supabase: SupabaseClient) {
+  if (!isPushSupported()) return
+
+  const registration = await navigator.serviceWorker.getRegistration("/sw.js")
+  const subscription = await registration?.pushManager.getSubscription()
+  if (!subscription) return
+
+  const endpoint = subscription.endpoint
+  await subscription.unsubscribe()
+  await supabase.from("push_subscriptions").delete().eq("endpoint", endpoint)
+}
