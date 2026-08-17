@@ -6,12 +6,25 @@ import { createClient } from "@/lib/supabase/server"
 import { redirect } from "next/navigation"
 import Link from "next/link"
 
+interface ArbiterStats {
+  total_assignments: number
+  completed_assignments: number
+  pending_assignments: number
+  total_earnings: number
+  pending_payments: number
+  average_rating: number
+  tournaments_this_month: number
+  next_assignment_date: string | null
+}
+
 async function getDashboardData(userId: string) {
   const supabase = await createClient()
 
   const { data: profile } = await supabase.from("profiles").select("*").eq("id", userId).single()
 
-  const { data: stats } = await supabase.rpc("get_arbiter_activity_summary", { arbiter_uuid: userId }).single()
+  const { data: stats } = await supabase
+    .rpc("get_arbiter_activity_summary", { arbiter_uuid: userId })
+    .single<ArbiterStats>()
 
   const { data: assignments } = await supabase
     .from("assignment_details")
@@ -49,12 +62,10 @@ export default async function DashboardPage() {
   }
 
   const { profile, stats, assignments, notifications } = await getDashboardData(user.id)
-  
+
   const displayName = profile?.first_name
     ? `${profile.first_name} ${profile.last_name ?? ""}`.trim()
     : "Arbiter"
-
-
 
   return (
     <div className="space-y-6">
@@ -108,7 +119,7 @@ export default async function DashboardPage() {
             <TrendingUp className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{stats?.average_rating || "0.0"}</div>
+            <div className="text-2xl font-bold">{Number(stats?.average_rating || 0).toFixed(1)}</div>
             <p className="text-xs text-muted-foreground">Out of 5.0</p>
           </CardContent>
         </Card>
