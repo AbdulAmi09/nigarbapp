@@ -145,10 +145,6 @@ export default async function DashboardPage() {
 
   const displayName = profile?.first_name ? `${profile.first_name} ${profile.last_name ?? ""}`.trim() : "Arbiter"
 
-  const licenseExpiryDays = profile?.license_expiry ? daysUntil(profile.license_expiry) : null
-  const licenseStatus =
-    licenseExpiryDays === null ? null : licenseExpiryDays < 0 ? "expired" : licenseExpiryDays <= 60 ? "expiring" : "ok"
-
   return (
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -166,33 +162,15 @@ export default async function DashboardPage() {
         </div>
       </div>
 
-      {licenseStatus === "expired" && (
-        <Alert variant="destructive">
-          <AlertTriangle className="h-4 w-4" />
-          <AlertTitle>Your arbiter license has expired</AlertTitle>
-          <AlertDescription>
-            <span>
-              It expired {Math.abs(licenseExpiryDays!)} day{Math.abs(licenseExpiryDays!) === 1 ? "" : "s"} ago on{" "}
-              {new Date(profile!.license_expiry).toLocaleDateString()}. Renew it to keep receiving assignments.
-            </span>
-            <Button asChild size="sm" variant="outline" className="mt-2 bg-transparent">
-              <Link href="/dashboard/profile">Go to Profile</Link>
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
-      {licenseStatus === "expiring" && (
+      {profile && !profile.is_active && (
         <Alert className="border-amber-500/30 bg-amber-500/5 [&>svg]:text-amber-600">
           <AlertTriangle className="h-4 w-4" />
-          <AlertTitle className="text-amber-700">Your arbiter license expires soon</AlertTitle>
+          <AlertTitle className="text-amber-700">Your account is currently inactive</AlertTitle>
           <AlertDescription>
             <span>
-              It expires in {licenseExpiryDays} day{licenseExpiryDays === 1 ? "" : "s"} on{" "}
-              {new Date(profile!.license_expiry).toLocaleDateString()}. Renew it to avoid a gap in your eligibility.
+              You retain your {getArbiterTitle(profile.arbiter_level)} title, but you'll need to complete a
+              refresher course to become active again and receive assignments.
             </span>
-            <Button asChild size="sm" variant="outline" className="mt-2 bg-transparent">
-              <Link href="/dashboard/profile">Go to Profile</Link>
-            </Button>
           </AlertDescription>
         </Alert>
       )}

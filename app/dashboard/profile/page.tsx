@@ -101,7 +101,13 @@ export default function ProfilePage() {
 
     try {
       if (profile.avatar_url) {
-        const oldPath = profile.avatar_url.split("/").pop()
+        // avatar_url is a full public URL like .../object/public/avatars/avatars/<file> --
+        // the object's path within the bucket is everything after that marker, not just
+        // the last path segment (which used to drop the "avatars/" subfolder prefix and
+        // silently fail to find/delete the old file).
+        const marker = "/object/public/avatars/"
+        const markerIndex = profile.avatar_url.indexOf(marker)
+        const oldPath = markerIndex !== -1 ? profile.avatar_url.slice(markerIndex + marker.length) : null
         if (oldPath) {
           await supabase.storage.from("avatars").remove([oldPath])
         }
@@ -379,20 +385,14 @@ export default function ProfilePage() {
                     <div>
                       <p className="font-medium">{profile.arbiter_level} Arbiter License</p>
                       <p className="text-sm text-muted-foreground">License: {profile.license_number}</p>
-                      {profile.license_expiry && (
-                        <p className="text-sm text-muted-foreground">
-                          Expires: {new Date(profile.license_expiry).toLocaleDateString()}
-                        </p>
-                      )}
+                      <p className="text-sm text-muted-foreground">
+                        {profile.is_active
+                          ? "Title held for life -- no expiry"
+                          : "Title retained -- refresher course required to reactivate"}
+                      </p>
                     </div>
-                    <Badge
-                      variant={
-                        profile.license_expiry && new Date(profile.license_expiry) > new Date()
-                          ? "default"
-                          : "destructive"
-                      }
-                    >
-                      {profile.license_expiry && new Date(profile.license_expiry) > new Date() ? "Active" : "Expired"}
+                    <Badge variant={profile.is_active ? "default" : "destructive"}>
+                      {profile.is_active ? "Active" : "Inactive"}
                     </Badge>
                   </div>
                 )}
