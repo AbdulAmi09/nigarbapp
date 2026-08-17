@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Progress } from "@/components/ui/progress"
-import { Trophy, MapPin, Calendar, Star, Clock, Loader2 } from "lucide-react"
+import { Trophy, MapPin, Calendar, Clock, Loader2 } from "lucide-react"
 import { createBrowserClient } from "@supabase/ssr"
 import { useRouter } from "next/navigation"
 import { useEffect, useState, useRef } from "react"
@@ -51,7 +51,6 @@ export default function ProfilePage() {
   const [profile, setProfile] = useState<Profile | null>(null)
   const [stats, setStats] = useState<Stats | null>(null)
   const [assignments, setAssignments] = useState<Assignment[]>([])
-  const [tournamentEvaluations, setTournamentEvaluations] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
 
@@ -85,17 +84,9 @@ export default function ProfilePage() {
         .order("created_at", { ascending: false })
         .limit(10)
 
-      // Get evaluations for ratings
-      const { data: evaluationsData } = await supabase
-        .from("tournament_evaluations")
-        .select("overall_rating, submitted_at")
-        .eq("evaluator_id", user.id)
-        .order("submitted_at", { ascending: false })
-
       setProfile(profileData)
       setStats(statsData)
       setAssignments(assignmentsData || [])
-      setTournamentEvaluations(evaluationsData || [])
       setLoading(false)
     }
 
@@ -159,13 +150,6 @@ export default function ProfilePage() {
   const completionRate =
     stats?.total_assignments && stats.total_assignments > 0
       ? Math.round((stats.completed_assignments / stats.total_assignments) * 100)
-      : 0
-
-  // Calculate average rating
-  const avgRating =
-    tournamentEvaluations && tournamentEvaluations.length > 0
-      ? tournamentEvaluations.reduce((sum: number, evalData: any) => sum + evalData.overall_rating, 0) /
-        tournamentEvaluations.length
       : 0
 
   return (
@@ -266,14 +250,6 @@ export default function ProfilePage() {
 
                 <div className="space-y-2">
                   <div className="flex justify-between text-sm">
-                    <span>Average Rating</span>
-                    <span>{avgRating.toFixed(1)}/5.0</span>
-                  </div>
-                  <Progress value={(avgRating / 5) * 100} className="h-2" />
-                </div>
-
-                <div className="space-y-2">
-                  <div className="flex justify-between text-sm">
                     <span>Years Experience</span>
                     <span>{profile.years_experience || 0} years</span>
                   </div>
@@ -321,21 +297,6 @@ export default function ProfilePage() {
                     </div>
                     <h3 className="font-semibold">Century Club</h3>
                     <p className="text-sm text-muted-foreground">Arbitrated 100+ tournaments</p>
-                    <Badge variant="default">Achieved</Badge>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-
-            {avgRating >= 4.5 && (
-              <Card>
-                <CardContent className="pt-6">
-                  <div className="flex flex-col items-center text-center space-y-2">
-                    <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center">
-                      <Star className="w-6 h-6 text-blue-600" />
-                    </div>
-                    <h3 className="font-semibold">Excellence Award</h3>
-                    <p className="text-sm text-muted-foreground">Maintained 4.5+ rating</p>
                     <Badge variant="default">Achieved</Badge>
                   </div>
                 </CardContent>
