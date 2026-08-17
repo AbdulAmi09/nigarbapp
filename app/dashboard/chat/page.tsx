@@ -8,6 +8,17 @@ import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Textarea } from "@/components/ui/textarea"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Label } from "@/components/ui/label"
+import {
   MessageSquare,
   Send,
   Users,
@@ -33,7 +44,6 @@ import {
   Pencil,
   BellOff,
   Bell,
-  LogOut,
   UserMinus,
   Settings,
   Smile,
@@ -43,6 +53,8 @@ import {
   PhoneOutgoing,
   Play,
   BellRing,
+  Flag,
+  Ban,
 } from "lucide-react"
 import { createBrowserClient } from "@supabase/ssr"
 import type { RealtimeChannel } from "@supabase/supabase-js"
@@ -297,6 +309,8 @@ export default function ChatPage() {
     { id: string; peerId: string; peerName: string; call_type: string; status: string; created_at: string; outgoing: boolean }[]
   >([])
   const [loadingCallLog, setLoadingCallLog] = useState(false)
+  const [loadingOlderMessages, setLoadingOlderMessages] = useState(false)
+  const [hasMoreOlderMessages, setHasMoreOlderMessages] = useState(true)
   const [showMessageSearch, setShowMessageSearch] = useState(false)
   const [messageSearchQuery, setMessageSearchQuery] = useState("")
   const [messageSearchResults, setMessageSearchResults] = useState<
@@ -305,6 +319,14 @@ export default function ChatPage() {
   const [searchingMessages, setSearchingMessages] = useState(false)
   const [lightboxImageUrl, setLightboxImageUrl] = useState<string | null>(null)
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null)
+  const [blockedUserIds, setBlockedUserIds] = useState<Set<string>>(new Set())
+  const [reportTarget, setReportTarget] = useState<{ userId: string; userName: string; roomId: string; messageId?: string } | null>(
+    null,
+  )
+  const [reportReason, setReportReason] = useState<"spam" | "harassment" | "inappropriate_content" | "other">("spam")
+  const [reportDetails, setReportDetails] = useState("")
+  const [reportAlsoBlock, setReportAlsoBlock] = useState(true)
+  const [submittingReport, setSubmittingReport] = useState(false)
   const chatContainerRef = useRef<HTMLDivElement>(null)
   const messageRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const messageSearchDebounceRef = useRef<NodeJS.Timeout | null>(null)
@@ -487,6 +509,8 @@ export default function ChatPage() {
       const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).single()
       setIsSuperadmin(profile?.role === "superadmin")
 
+      fetchBlockedUsers()
+
       const { data: memberRooms } = await supabase
         .from("group_members")
         .select(
@@ -505,6 +529,7 @@ export default function ChatPage() {
         `,
         )
         .eq("user_id", user.id)
+        .eq("is_hidden", false)
 
       if (memberRooms && memberRooms.length > 0) {
         const rooms: ChatRoom[] = memberRooms.map((m: any) => ({
@@ -548,8 +573,27 @@ export default function ChatPage() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "unread_messages", filter: `user_id=eq.${currentUserId}` },
-        () => {
+        (payload) => {
+          const roomId = (payload.new as any)?.room_id as string | undefined
+
           setChatRooms((rooms) => {
+            // A conversation that was hidden (delete-for-me) reappears once
+            // it isn't in local state anymore but a new unread event
+            // arrives for it -- go fetch it and add it back to the list.
+            if (roomId && !rooms.some((r) => r.id === roomId)) {
+              supabase
+                .from("chat_rooms")
+                .select("id, name, room_type, description, logo_url, is_direct_message, direct_message_with, created_by")
+                .eq("id", roomId)
+                .single()
+                .then(({ data }) => {
+                  if (!data) return
+                  const room: ChatRoom = { ...data, member_count: 0 }
+                  setChatRooms((prev) => (prev.some((r) => r.id === room.id) ? prev : [room, ...prev]))
+                  setFilteredRooms((prev) => (prev.some((r) => r.id === room.id) ? prev : [room, ...prev]))
+                  refreshRoomsMeta([room], currentUserId)
+                })
+            }
             refreshRoomsMeta(rooms, currentUserId)
             return rooms
           })
@@ -624,6 +668,7 @@ export default function ChatPage() {
     const { scrollHeight, scrollTop, clientHeight } = chatContainerRef.current
     const isAtBottom = scrollHeight - scrollTop - clientHeight < 50
     setShowNewMessagesButton(!isAtBottom)
+    if (scrollTop < 100) loadOlderMessages()
   }
 
   const scrollToBottom = () => {
@@ -633,20 +678,62 @@ export default function ChatPage() {
   }
 
   async function fetchMessages(roomId: string) {
+    setHasMoreOlderMessages(true)
     const { data } = await supabase
       .from("chat_messages")
       .select(MESSAGE_SELECT)
       .eq("room_id", roomId)
-      .order("created_at", { ascending: true })
+      .order("created_at", { ascending: false })
       .limit(50)
 
     if (data) {
-      const profileMap = await fetchProfilesMap(data.map((m: any) => m.sender_id))
-      setMessages(data.map((m: any) => formatMessage(m, profileMap[m.sender_id])))
-      fetchReactions(data.map((m: any) => m.id))
+      const ordered = [...data].reverse()
+      const profileMap = await fetchProfilesMap(ordered.map((m: any) => m.sender_id))
+      setMessages(ordered.map((m: any) => formatMessage(m, profileMap[m.sender_id])))
+      fetchReactions(ordered.map((m: any) => m.id))
+      if (data.length < 50) setHasMoreOlderMessages(false)
       setTimeout(() => scrollToBottom(), 100)
     }
   }
+
+  const loadOlderMessagesRef = useRef(false)
+  const loadOlderMessages = useCallback(async () => {
+    if (!activeRoom || messages.length === 0 || loadOlderMessagesRef.current || !hasMoreOlderMessages) return
+    loadOlderMessagesRef.current = true
+    setLoadingOlderMessages(true)
+
+    const oldest = messages[0]
+    const container = chatContainerRef.current
+    const prevScrollHeight = container?.scrollHeight || 0
+    const prevScrollTop = container?.scrollTop || 0
+
+    const { data } = await supabase
+      .from("chat_messages")
+      .select(MESSAGE_SELECT)
+      .eq("room_id", activeRoom.id)
+      .lt("created_at", oldest.created_at)
+      .order("created_at", { ascending: false })
+      .limit(50)
+
+    if (data && data.length > 0) {
+      const older = [...data].reverse()
+      const profileMap = await fetchProfilesMap(older.map((m: any) => m.sender_id))
+      const formatted = older.map((m: any) => formatMessage(m, profileMap[m.sender_id]))
+      setMessages((prev) => [...formatted, ...prev])
+      fetchReactions(formatted.map((m) => m.id))
+      if (data.length < 50) setHasMoreOlderMessages(false)
+      requestAnimationFrame(() => {
+        if (container) {
+          container.scrollTop = container.scrollHeight - prevScrollHeight + prevScrollTop
+        }
+      })
+    } else {
+      setHasMoreOlderMessages(false)
+    }
+
+    setLoadingOlderMessages(false)
+    loadOlderMessagesRef.current = false
+  }, [activeRoom, messages, hasMoreOlderMessages, supabase, fetchProfilesMap])
 
   async function fetchReactions(messageIds: string[]) {
     if (messageIds.length === 0) {
@@ -800,6 +887,7 @@ export default function ChatPage() {
         const loaded = data.map((m: any) => formatMessage(m, profileMap[m.sender_id])).reverse()
         setMessages(loaded)
         fetchReactions(loaded.map((m) => m.id))
+        setHasMoreOlderMessages(data.length === 50)
       }
     }
     closeMessageSearch()
@@ -1192,16 +1280,36 @@ export default function ChatPage() {
     })
   }
 
-  const handleLeaveGroup = async () => {
-    if (!activeRoom || !currentUserId) return
-    const { error } = await supabase
-      .from("group_members")
-      .delete()
-      .eq("group_id", activeRoom.id)
-      .eq("user_id", currentUserId)
-
+  // Delete-for-me: hides the conversation from my own chat list only.
+  // Nothing is removed for the other side, and it reappears (with full
+  // history intact) if they message again -- see set_conversation_hidden /
+  // increment_unread_for_room_members on the DB side.
+  const handleDeleteConversation = async (roomId: string) => {
+    const { error } = await supabase.rpc("set_conversation_hidden", { p_room_id: roomId, p_hidden: true })
     if (error) {
-      console.error("[v0] Error leaving group:", error)
+      console.error("[v0] Error deleting conversation:", error)
+      return
+    }
+
+    setChatRooms((prev) => prev.filter((r) => r.id !== roomId))
+    setFilteredRooms((prev) => prev.filter((r) => r.id !== roomId))
+    setShowGroupInfo(false)
+    if (activeRoom?.id === roomId) {
+      setActiveRoom(null)
+      setMessages([])
+      setRoomMembers([])
+    }
+  }
+
+  // Groups can't be left by members -- only an admin can remove someone or
+  // disband the whole group (product decision, not a technical default).
+  const handleDisbandGroup = async () => {
+    if (!activeRoom) return
+    if (!confirm(`Disband "${activeRoom.name}"? This deletes the group and all its messages for everyone.`)) return
+
+    const { error } = await supabase.rpc("disband_group", { p_room_id: activeRoom.id })
+    if (error) {
+      console.error("[v0] Error disbanding group:", error)
       return
     }
 
@@ -1221,6 +1329,65 @@ export default function ChatPage() {
       return
     }
     setRoomMembers((prev) => prev.filter((m) => m.id !== userId))
+  }
+
+  const fetchBlockedUsers = async () => {
+    const { data } = await supabase.from("blocked_users").select("blocked_id")
+    setBlockedUserIds(new Set((data || []).map((r: any) => r.blocked_id)))
+  }
+
+  const toggleBlockUser = async (userId: string) => {
+    if (blockedUserIds.has(userId)) {
+      const { error } = await supabase.from("blocked_users").delete().eq("blocked_id", userId)
+      if (error) {
+        console.error("[v0] Error unblocking user:", error)
+        return
+      }
+      setBlockedUserIds((prev) => {
+        const next = new Set(prev)
+        next.delete(userId)
+        return next
+      })
+    } else {
+      const { error } = await supabase.from("blocked_users").insert({ blocked_id: userId })
+      if (error) {
+        console.error("[v0] Error blocking user:", error)
+        return
+      }
+      setBlockedUserIds((prev) => new Set(prev).add(userId))
+    }
+  }
+
+  const openReport = (target: { userId: string; userName: string; roomId: string; messageId?: string }) => {
+    setReportTarget(target)
+    setReportReason("spam")
+    setReportDetails("")
+    setReportAlsoBlock(true)
+  }
+
+  const submitReport = async () => {
+    if (!reportTarget) return
+    setSubmittingReport(true)
+    try {
+      const { error } = await supabase.from("chat_reports").insert({
+        reported_user_id: reportTarget.userId,
+        room_id: reportTarget.roomId,
+        message_id: reportTarget.messageId || null,
+        reason: reportReason,
+        details: reportDetails.trim() || null,
+      })
+      if (error) throw error
+
+      if (reportAlsoBlock && !blockedUserIds.has(reportTarget.userId)) {
+        await toggleBlockUser(reportTarget.userId)
+      }
+
+      setReportTarget(null)
+    } catch (error) {
+      console.error("[v0] Error submitting report:", error)
+    } finally {
+      setSubmittingReport(false)
+    }
   }
 
   const searchUsersToAdd = async (query: string) => {
@@ -1646,9 +1813,40 @@ export default function ChatPage() {
                   <Settings className="w-4 h-4" />
                 </Button>
               ) : (
-                <Button variant="ghost" size="icon">
-                  <MoreVertical className="w-4 h-4" />
-                </Button>
+                activeRoom &&
+                activeRoomOtherUserId && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="icon">
+                        <MoreVertical className="w-4 h-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem
+                        onClick={() =>
+                          openReport({
+                            userId: activeRoomOtherUserId,
+                            userName: roomMembers.find((m) => m.id === activeRoomOtherUserId)?.name || activeRoom.name,
+                            roomId: activeRoom.id,
+                          })
+                        }
+                      >
+                        <Flag className="w-4 h-4 mr-2" />
+                        Report {roomMembers.find((m) => m.id === activeRoomOtherUserId)?.name || "contact"}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => toggleBlockUser(activeRoomOtherUserId)}>
+                        <Ban className="w-4 h-4 mr-2" />
+                        {blockedUserIds.has(activeRoomOtherUserId) ? "Unblock" : "Block"}{" "}
+                        {roomMembers.find((m) => m.id === activeRoomOtherUserId)?.name || "contact"}
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem className="text-destructive" onClick={() => handleDeleteConversation(activeRoom.id)}>
+                        <Trash2 className="w-4 h-4 mr-2" />
+                        Delete Chat
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )
               )}
             </div>
           </div>
@@ -1696,6 +1894,11 @@ export default function ChatPage() {
           )}
 
           <div ref={chatContainerRef} onScroll={handleChatScroll} className="flex-1 overflow-y-auto p-4 space-y-1 relative min-h-0">
+            {loadingOlderMessages && (
+              <div className="flex justify-center py-2">
+                <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+              </div>
+            )}
             {groupedMessages.map((group) => (
               <div key={group.date}>
                 <div className="flex justify-center my-3">
@@ -1859,6 +2062,24 @@ export default function ChatPage() {
                             {isOwn && (
                               <Button variant="ghost" size="icon" className="w-6 h-6" onClick={() => openMessageInfo(message)} title="Info">
                                 <Info className="w-3.5 h-3.5" />
+                              </Button>
+                            )}
+                            {!isOwn && !message.is_deleted && activeRoom && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="w-6 h-6"
+                                onClick={() =>
+                                  openReport({
+                                    userId: message.sender_id,
+                                    userName: message.sender_name,
+                                    roomId: activeRoom.id,
+                                    messageId: message.id,
+                                  })
+                                }
+                                title="Report"
+                              >
+                                <Flag className="w-3.5 h-3.5" />
                               </Button>
                             )}
                             {isOwn && !message.is_deleted && message.message_type === "text" && (
@@ -2139,10 +2360,21 @@ export default function ChatPage() {
                     </div>
                   )}
 
-                  <Button variant="outline" className="w-full text-destructive" onClick={handleLeaveGroup}>
-                    <LogOut className="w-4 h-4 mr-2" />
-                    Leave Group
+                  <Button variant="outline" className="w-full" onClick={() => activeRoom && handleDeleteConversation(activeRoom.id)}>
+                    <Trash2 className="w-4 h-4 mr-2" />
+                    Delete Chat
                   </Button>
+
+                  {canManageMembers && (
+                    <Button variant="outline" className="w-full text-destructive" onClick={handleDisbandGroup}>
+                      <Ban className="w-4 h-4 mr-2" />
+                      Disband Group
+                    </Button>
+                  )}
+
+                  <p className="text-xs text-muted-foreground text-center">
+                    Members can't leave this group. Only an admin can remove someone or disband it.
+                  </p>
                 </>
               )
             })()}
@@ -2218,6 +2450,50 @@ export default function ChatPage() {
               })}
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!reportTarget} onOpenChange={(open) => !open && setReportTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Report {reportTarget?.userName}</DialogTitle>
+            <DialogDescription>
+              {reportTarget?.messageId ? "Reporting a specific message." : "Reporting this contact."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <RadioGroup value={reportReason} onValueChange={(v) => setReportReason(v as typeof reportReason)}>
+              {[
+                { value: "spam", label: "Spam" },
+                { value: "harassment", label: "Harassment or abuse" },
+                { value: "inappropriate_content", label: "Inappropriate content" },
+                { value: "other", label: "Other" },
+              ].map((opt) => (
+                <div key={opt.value} className="flex items-center gap-2">
+                  <RadioGroupItem value={opt.value} id={`report-${opt.value}`} />
+                  <Label htmlFor={`report-${opt.value}`} className="font-normal">
+                    {opt.label}
+                  </Label>
+                </div>
+              ))}
+            </RadioGroup>
+            <Textarea
+              placeholder="Add details (optional)"
+              value={reportDetails}
+              onChange={(e) => setReportDetails(e.target.value)}
+              rows={3}
+            />
+            <div className="flex items-center gap-2">
+              <Checkbox id="report-also-block" checked={reportAlsoBlock} onCheckedChange={(v) => setReportAlsoBlock(!!v)} />
+              <Label htmlFor="report-also-block" className="font-normal">
+                Also block {reportTarget?.userName}
+              </Label>
+            </div>
+            <Button className="w-full" onClick={submitReport} disabled={submittingReport}>
+              {submittingReport && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Submit Report
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
 
