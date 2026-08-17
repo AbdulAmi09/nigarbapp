@@ -5,12 +5,21 @@ import type React from "react"
 import { createContext, useContext, useEffect, useRef, useState } from "react"
 import { createClient } from "@/lib/supabase/client"
 import type { RealtimeChannel } from "@supabase/supabase-js"
+import { isPushSupported, subscribeToPush } from "@/lib/push"
 
 interface PresenceContextValue {
   onlineIds: Set<string>
+  pushSupported: boolean
+  pushPermission: NotificationPermission | null
+  enablePush: () => Promise<boolean>
 }
 
-const PresenceContext = createContext<PresenceContextValue>({ onlineIds: new Set() })
+const PresenceContext = createContext<PresenceContextValue>({
+  onlineIds: new Set(),
+  pushSupported: false,
+  pushPermission: null,
+  enablePush: async () => false,
+})
 
 export function useOnlinePresence() {
   return useContext(PresenceContext)
@@ -19,8 +28,20 @@ export function useOnlinePresence() {
 export default function PresenceProvider({ children }: { children: React.ReactNode }) {
   const supabase = createClient()
   const [onlineIds, setOnlineIds] = useState<Set<string>>(new Set())
+  const [pushPermission, setPushPermission] = useState<NotificationPermission | null>(null)
   const channelRef = useRef<RealtimeChannel | null>(null)
   const userIdRef = useRef<string | null>(null)
+  const pushSupported = isPushSupported()
+
+  useEffect(() => {
+    if (pushSupported) setPushPermission(Notification.permission)
+  }, [pushSupported])
+
+  const enablePush = async () => {
+    const ok = await subscribeToPush(supabase)
+    if (pushSupported) setPushPermission(Notification.permission)
+    return ok
+  }
 
   useEffect(() => {
     async function init() {
@@ -61,5 +82,9 @@ export default function PresenceProvider({ children }: { children: React.ReactNo
     }
   }, [])
 
-  return <PresenceContext.Provider value={{ onlineIds }}>{children}</PresenceContext.Provider>
+  return (
+    <PresenceContext.Provider value={{ onlineIds, pushSupported, pushPermission, enablePush }}>
+      {children}
+    </PresenceContext.Provider>
+  )
 }

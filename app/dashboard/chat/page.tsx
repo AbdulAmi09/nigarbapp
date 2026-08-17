@@ -41,6 +41,8 @@ import {
   History,
   PhoneMissed,
   PhoneOutgoing,
+  Play,
+  BellRing,
 } from "lucide-react"
 import { createBrowserClient } from "@supabase/ssr"
 import type { RealtimeChannel } from "@supabase/supabase-js"
@@ -76,6 +78,7 @@ interface Message {
   file_url?: string
   file_name?: string
   file_size?: number
+  duration?: number | null
   read_by: string[]
   reply_to?: string | null
   reply_preview?: { content: string; message_type: string } | null
@@ -111,6 +114,7 @@ const MESSAGE_SELECT = `
   file_url,
   file_name,
   file_size,
+  duration,
   read_by,
   reply_to,
   is_deleted,
@@ -127,10 +131,108 @@ const MESSAGE_SELECT = `
   )
 `
 
+function formatDuration(seconds: number) {
+  const mins = Math.floor(seconds / 60)
+  const secs = Math.floor(seconds % 60)
+  return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`
+}
+
+const VOICE_BAR_COUNT = 28
+
+function VoiceBubble({ url, isOwn }: { url: string; isOwn: boolean }) {
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const [peaks, setPeaks] = useState<number[] | null>(null)
+  const [playing, setPlaying] = useState(false)
+  const [progress, setProgress] = useState(0)
+  const [duration, setDuration] = useState(0)
+
+  useEffect(() => {
+    let cancelled = false
+    async function loadPeaks() {
+      try {
+        const AudioCtx = (window.AudioContext || (window as any).webkitAudioContext) as typeof AudioContext
+        const res = await fetch(url)
+        const buf = await res.arrayBuffer()
+        const ctx = new AudioCtx()
+        const audioBuffer = await ctx.decodeAudioData(buf)
+        const channel = audioBuffer.getChannelData(0)
+        const blockSize = Math.max(1, Math.floor(channel.length / VOICE_BAR_COUNT))
+        const bars: number[] = []
+        for (let i = 0; i < VOICE_BAR_COUNT; i++) {
+          let sum = 0
+          for (let j = 0; j < blockSize; j++) sum += Math.abs(channel[i * blockSize + j] || 0)
+          bars.push(sum / blockSize)
+        }
+        const max = Math.max(...bars, 0.0001)
+        if (!cancelled) setPeaks(bars.map((b) => Math.max(0.18, b / max)))
+        ctx.close()
+      } catch {
+        if (!cancelled) setPeaks(Array.from({ length: VOICE_BAR_COUNT }, (_, i) => 0.25 + ((i * 37) % 60) / 100))
+      }
+    }
+    loadPeaks()
+    return () => {
+      cancelled = true
+    }
+  }, [url])
+
+  const togglePlay = () => {
+    if (!audioRef.current) return
+    if (playing) audioRef.current.pause()
+    else audioRef.current.play()
+  }
+
+  const bars = peaks || Array.from({ length: VOICE_BAR_COUNT }, () => 0.3)
+
+  return (
+    <div className={`p-2.5 rounded-lg flex items-center gap-2 w-56 ${isOwn ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
+      <audio
+        ref={audioRef}
+        src={url}
+        preload="metadata"
+        className="hidden"
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => {
+          setPlaying(false)
+          setProgress(0)
+        }}
+        onLoadedMetadata={(e) => setDuration(e.currentTarget.duration || 0)}
+        onTimeUpdate={(e) => {
+          const d = e.currentTarget.duration || duration
+          if (d) setProgress(e.currentTarget.currentTime / d)
+        }}
+      />
+      <button
+        type="button"
+        onClick={togglePlay}
+        className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${isOwn ? "bg-primary-foreground/20" : "bg-background"}`}
+      >
+        {playing ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
+      </button>
+      <div className="flex-1 flex items-end gap-[2px] h-6">
+        {bars.map((h, i) => {
+          const played = i / bars.length < progress
+          return (
+            <div
+              key={i}
+              className={`flex-1 rounded-full ${played ? (isOwn ? "bg-primary-foreground" : "bg-primary") : isOwn ? "bg-primary-foreground/40" : "bg-muted-foreground/30"}`}
+              style={{ height: `${Math.max(15, h * 100)}%` }}
+            />
+          )
+        })}
+      </div>
+      <span className={`text-[10px] tabular-nums shrink-0 ${isOwn ? "text-primary-foreground/80" : "text-muted-foreground"}`}>
+        {formatDuration(playing || progress > 0 ? (audioRef.current?.currentTime ?? duration) : duration)}
+      </span>
+    </div>
+  )
+}
+
 export default function ChatPage() {
   const router = useRouter()
   const { startCall } = useCall()
-  const { onlineIds } = useOnlinePresence()
+  const { onlineIds, pushSupported, pushPermission, enablePush } = useOnlinePresence()
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
@@ -189,7 +291,17 @@ export default function ChatPage() {
     { id: string; peerId: string; peerName: string; call_type: string; status: string; created_at: string; outgoing: boolean }[]
   >([])
   const [loadingCallLog, setLoadingCallLog] = useState(false)
+  const [showMessageSearch, setShowMessageSearch] = useState(false)
+  const [messageSearchQuery, setMessageSearchQuery] = useState("")
+  const [messageSearchResults, setMessageSearchResults] = useState<
+    { id: string; content: string; message_type: string; created_at: string }[]
+  >([])
+  const [searchingMessages, setSearchingMessages] = useState(false)
+  const [lightboxImageUrl, setLightboxImageUrl] = useState<string | null>(null)
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null)
   const chatContainerRef = useRef<HTMLDivElement>(null)
+  const messageRefs = useRef<Record<string, HTMLDivElement | null>>({})
+  const messageSearchDebounceRef = useRef<NodeJS.Timeout | null>(null)
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -208,6 +320,7 @@ export default function ChatPage() {
     file_url: msg.file_url,
     file_name: msg.file_name,
     file_size: msg.file_size,
+    duration: msg.duration ?? null,
     read_by: msg.read_by || [],
     reply_to: msg.reply_to,
     reply_preview: msg.reply_message ? { content: msg.reply_message.content, message_type: msg.reply_message.message_type } : null,
@@ -224,6 +337,14 @@ export default function ChatPage() {
     },
     [currentUserId],
   )
+
+  const notifyPush = useCallback((roomId: string, messageId: string, preview: string) => {
+    fetch("/api/push/notify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ roomId, messageId, preview }),
+    }).catch(() => {})
+  }, [])
 
   const refreshRoomsMeta = useCallback(
     async (rooms: ChatRoom[], userId: string) => {
@@ -256,6 +377,8 @@ export default function ChatPage() {
         switch (m.message_type) {
           case "image":
             return { text: "📷 Photo", at: m.created_at }
+          case "video":
+            return { text: "🎥 Video", at: m.created_at }
           case "voice":
             return { text: "🎤 Voice message", at: m.created_at }
           case "file":
@@ -513,15 +636,21 @@ export default function ChatPage() {
 
   const handleForward = async (targetRoomId: string) => {
     if (!forwardingMessage || !currentUserId) return
-    await supabase.from("chat_messages").insert({
-      room_id: targetRoomId,
-      sender_id: currentUserId,
-      content: forwardingMessage.content,
-      message_type: forwardingMessage.message_type,
-      file_url: forwardingMessage.file_url || null,
-      file_name: forwardingMessage.file_name || null,
-      file_size: forwardingMessage.file_size || null,
-    })
+    const { data: inserted } = await supabase
+      .from("chat_messages")
+      .insert({
+        room_id: targetRoomId,
+        sender_id: currentUserId,
+        content: forwardingMessage.content,
+        message_type: forwardingMessage.message_type,
+        file_url: forwardingMessage.file_url || null,
+        file_name: forwardingMessage.file_name || null,
+        file_size: forwardingMessage.file_size || null,
+        duration: forwardingMessage.duration || null,
+      })
+      .select("id")
+      .single()
+    if (inserted) notifyPush(targetRoomId, inserted.id, forwardingMessage.content)
     setForwardingMessage(null)
   }
 
@@ -561,6 +690,58 @@ export default function ChatPage() {
       )
     }
     setLoadingCallLog(false)
+  }
+
+  const searchMessages = (query: string) => {
+    setMessageSearchQuery(query)
+    if (messageSearchDebounceRef.current) clearTimeout(messageSearchDebounceRef.current)
+    if (!query.trim() || !activeRoom) {
+      setMessageSearchResults([])
+      return
+    }
+    messageSearchDebounceRef.current = setTimeout(async () => {
+      setSearchingMessages(true)
+      const { data } = await supabase
+        .from("chat_messages")
+        .select("id, content, message_type, created_at")
+        .eq("room_id", activeRoom.id)
+        .eq("is_deleted", false)
+        .ilike("content", `%${query.trim()}%`)
+        .order("created_at", { ascending: false })
+        .limit(20)
+      setMessageSearchResults(data || [])
+      setSearchingMessages(false)
+    }, 300)
+  }
+
+  const closeMessageSearch = () => {
+    setShowMessageSearch(false)
+    setMessageSearchQuery("")
+    setMessageSearchResults([])
+  }
+
+  const jumpToMessage = async (target: { id: string; created_at: string }) => {
+    if (!activeRoom) return
+    if (!messages.some((m) => m.id === target.id)) {
+      const { data } = await supabase
+        .from("chat_messages")
+        .select(MESSAGE_SELECT)
+        .eq("room_id", activeRoom.id)
+        .lte("created_at", target.created_at)
+        .order("created_at", { ascending: false })
+        .limit(50)
+      if (data) {
+        const loaded = data.map(formatMessage).reverse()
+        setMessages(loaded)
+        fetchReactions(loaded.map((m) => m.id))
+      }
+    }
+    closeMessageSearch()
+    setHighlightedMessageId(target.id)
+    setTimeout(() => {
+      messageRefs.current[target.id]?.scrollIntoView({ behavior: "smooth", block: "center" })
+    }, 150)
+    setTimeout(() => setHighlightedMessageId((cur) => (cur === target.id ? null : cur)), 2000)
   }
 
   async function fetchOtherUserLastSeen(room: ChatRoom, uidOverride?: string | null) {
@@ -609,11 +790,19 @@ export default function ChatPage() {
     const file = e.target.files?.[0]
     if (!file) return
 
+    const MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+    if (file.size > MAX_UPLOAD_BYTES) {
+      alert("File is too large. Max upload size is 50MB.")
+      e.target.value = ""
+      return
+    }
+
     setUploadingFile(true)
 
     try {
       const isImage = file.type.startsWith("image/")
-      const folder = isImage ? "images" : "files"
+      const isVideo = file.type.startsWith("video/")
+      const folder = isImage ? "images" : isVideo ? "videos" : "files"
       const fileName = `${currentUserId}/${activeRoom.id}/${folder}/${Date.now()}-${file.name}`
 
       const { error: uploadError } = await supabase.storage.from("chat-files").upload(fileName, file)
@@ -622,17 +811,24 @@ export default function ChatPage() {
 
       const { data: urlData } = supabase.storage.from("chat-files").getPublicUrl(fileName)
 
-      const messageType = isImage ? "image" : "file"
+      const messageType = isImage ? "image" : isVideo ? "video" : "file"
+      const label = isImage ? `[Image: ${file.name}]` : isVideo ? `[Video: ${file.name}]` : `[File: ${file.name}]`
 
-      await supabase.from("chat_messages").insert({
-        room_id: activeRoom.id,
-        sender_id: currentUserId,
-        content: isImage ? `[Image: ${file.name}]` : `[File: ${file.name}]`,
-        message_type: messageType,
-        file_url: urlData.publicUrl,
-        file_name: file.name,
-        file_size: file.size,
-      })
+      const { data: inserted } = await supabase
+        .from("chat_messages")
+        .insert({
+          room_id: activeRoom.id,
+          sender_id: currentUserId,
+          content: label,
+          message_type: messageType,
+          file_url: urlData.publicUrl,
+          file_name: file.name,
+          file_size: file.size,
+        })
+        .select("id")
+        .single()
+
+      if (inserted) notifyPush(activeRoom.id, inserted.id, label)
 
       if (fileInputRef.current) {
         fileInputRef.current.value = ""
@@ -713,16 +909,22 @@ export default function ChatPage() {
 
       const { data: urlData } = supabase.storage.from("chat-uploads").getPublicUrl(fileName)
 
-      await supabase.from("chat_messages").insert({
-        room_id: activeRoom.id,
-        sender_id: currentUserId,
-        content: "[Voice Message]",
-        message_type: "voice",
-        file_url: urlData.publicUrl,
-        file_name: "voice.webm",
-        file_size: audioBlob.size,
-        duration: recordingDuration,
-      })
+      const { data: inserted } = await supabase
+        .from("chat_messages")
+        .insert({
+          room_id: activeRoom.id,
+          sender_id: currentUserId,
+          content: "[Voice Message]",
+          message_type: "voice",
+          file_url: urlData.publicUrl,
+          file_name: "voice.webm",
+          file_size: audioBlob.size,
+          duration: recordingDuration,
+        })
+        .select("id")
+        .single()
+
+      if (inserted) notifyPush(activeRoom.id, inserted.id, "🎤 Voice message")
     } catch (error) {
       console.error("[v0] Error uploading voice message:", error)
     }
@@ -859,15 +1061,21 @@ export default function ChatPage() {
     setSending(true)
 
     try {
-      const { error } = await supabase.from("chat_messages").insert({
-        room_id: activeRoom.id,
-        sender_id: currentUserId,
-        content: newMessage.trim(),
-        message_type: "text",
-        reply_to: replyingTo?.id || null,
-      })
+      const { data: inserted, error } = await supabase
+        .from("chat_messages")
+        .insert({
+          room_id: activeRoom.id,
+          sender_id: currentUserId,
+          content: newMessage.trim(),
+          message_type: "text",
+          reply_to: replyingTo?.id || null,
+        })
+        .select("id")
+        .single()
 
       if (error) throw error
+
+      if (inserted) notifyPush(activeRoom.id, inserted.id, newMessage.trim())
 
       setNewMessage("")
       setReplyingTo(null)
@@ -1052,6 +1260,7 @@ export default function ChatPage() {
     setNewMessagesCount(0)
     setReplyingTo(null)
     setOpenReactionPickerFor(null)
+    closeMessageSearch()
     cancelEditMessage()
     await fetchMessages(room.id)
     await fetchRoomMembers(room)
@@ -1114,12 +1323,6 @@ export default function ChatPage() {
     return new Date(dateString).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
   }
 
-  const formatDuration = (seconds: number) => {
-    const mins = Math.floor(seconds / 60)
-    const secs = seconds % 60
-    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`
-  }
-
   const formatLastSeen = (dateString: string | null) => {
     if (!dateString) return null
     const diffMs = Date.now() - new Date(dateString).getTime()
@@ -1176,6 +1379,11 @@ export default function ChatPage() {
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold">Chats</h2>
               <div className="flex items-center">
+                {pushSupported && pushPermission !== "granted" && (
+                  <Button variant="ghost" size="icon" onClick={() => enablePush()} title="Enable message notifications">
+                    <BellRing className="w-4 h-4" />
+                  </Button>
+                )}
                 <Button variant="ghost" size="icon" onClick={openCallLog} title="Call log">
                   <History className="w-4 h-4" />
                 </Button>
@@ -1359,6 +1567,19 @@ export default function ChatPage() {
                 <Button
                   variant="ghost"
                   size="icon"
+                  onClick={() => {
+                    setShowMessageSearch((v) => !v)
+                    if (showMessageSearch) closeMessageSearch()
+                  }}
+                  title="Search messages"
+                >
+                  <Search className="w-4 h-4" />
+                </Button>
+              )}
+              {activeRoom && (
+                <Button
+                  variant="ghost"
+                  size="icon"
                   onClick={() => toggleMuteRoom(activeRoom.id)}
                   title={mutedRoomIds.has(activeRoom.id) ? "Unmute" : "Mute"}
                 >
@@ -1377,6 +1598,48 @@ export default function ChatPage() {
             </div>
           </div>
 
+          {showMessageSearch && (
+            <div className="px-3 py-2 border-b bg-muted/50 shrink-0 relative">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground w-4 h-4" />
+                <Input
+                  autoFocus
+                  placeholder="Search in this chat..."
+                  className="pl-10 pr-8"
+                  value={messageSearchQuery}
+                  onChange={(e) => searchMessages(e.target.value)}
+                />
+                <button className="absolute right-2 top-1/2 -translate-y-1/2" onClick={closeMessageSearch}>
+                  <X className="w-4 h-4 text-muted-foreground" />
+                </button>
+              </div>
+              {messageSearchQuery.trim() && (
+                <div className="mt-2 max-h-64 overflow-y-auto rounded-lg border bg-background shadow-sm">
+                  {searchingMessages ? (
+                    <div className="flex justify-center py-4">
+                      <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                    </div>
+                  ) : messageSearchResults.length === 0 ? (
+                    <p className="text-sm text-muted-foreground text-center py-4">No messages found</p>
+                  ) : (
+                    messageSearchResults.map((r) => (
+                      <button
+                        key={r.id}
+                        onClick={() => jumpToMessage(r)}
+                        className="w-full text-left px-3 py-2 hover:bg-muted/70 border-b last:border-b-0"
+                      >
+                        <p className="text-sm truncate">{r.message_type === "text" ? r.content : `[${r.message_type}]`}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {new Date(r.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                        </p>
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           <div ref={chatContainerRef} onScroll={handleChatScroll} className="flex-1 overflow-y-auto p-4 space-y-1 relative min-h-0">
             {groupedMessages.map((group) => (
               <div key={group.date}>
@@ -1387,7 +1650,13 @@ export default function ChatPage() {
                   if (message.message_type === "call") {
                     const missed = message.content.startsWith("Missed")
                     return (
-                      <div key={message.id} className="flex justify-center my-2">
+                      <div
+                        key={message.id}
+                        ref={(el) => {
+                          messageRefs.current[message.id] = el
+                        }}
+                        className={`flex justify-center my-2 rounded-lg transition-colors ${highlightedMessageId === message.id ? "bg-yellow-100 dark:bg-yellow-900/30" : ""}`}
+                      >
                         <span className="text-xs bg-muted text-muted-foreground px-3 py-1.5 rounded-full flex items-center gap-1.5">
                           {missed ? (
                             <PhoneMissed className="w-3.5 h-3.5 text-destructive" />
@@ -1407,7 +1676,13 @@ export default function ChatPage() {
                   const messageReactions = reactions[message.id] || []
 
                   return (
-                    <div key={message.id} className={`group flex gap-3 py-1.5 ${isOwn ? "flex-row-reverse" : ""}`}>
+                    <div
+                      key={message.id}
+                      ref={(el) => {
+                        messageRefs.current[message.id] = el
+                      }}
+                      className={`group flex gap-3 py-1.5 rounded-lg transition-colors ${isOwn ? "flex-row-reverse" : ""} ${highlightedMessageId === message.id ? "bg-yellow-100 dark:bg-yellow-900/30" : ""}`}
+                    >
                       <Avatar className="w-8 h-8 shrink-0">
                         <AvatarImage src={message.sender_avatar || ""} alt={message.sender_name} />
                         <AvatarFallback>
@@ -1443,8 +1718,17 @@ export default function ChatPage() {
                                   </div>
                                 )}
                                 {message.message_type === "image" && message.file_url && (
-                                  <div className="rounded-lg overflow-hidden">
+                                  <button
+                                    type="button"
+                                    onClick={() => setLightboxImageUrl(message.file_url!)}
+                                    className="rounded-lg overflow-hidden block cursor-zoom-in"
+                                  >
                                     <img src={message.file_url || "/placeholder.svg"} alt={message.file_name} className="max-w-xs h-auto" />
+                                  </button>
+                                )}
+                                {message.message_type === "video" && message.file_url && (
+                                  <div className="rounded-lg overflow-hidden max-w-xs">
+                                    <video controls className="w-full h-auto" src={message.file_url} />
                                   </div>
                                 )}
                                 {message.message_type === "file" && message.file_url && (
@@ -1455,11 +1739,7 @@ export default function ChatPage() {
                                   </a>
                                 )}
                                 {message.message_type === "voice" && message.file_url && (
-                                  <div className={`p-3 rounded-lg ${isOwn ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
-                                    <audio controls className="w-full max-w-xs h-8">
-                                      <source src={message.file_url} type="audio/webm" />
-                                    </audio>
-                                  </div>
+                                  <VoiceBubble url={message.file_url} isOwn={isOwn} />
                                 )}
                               </>
                             )}
@@ -1864,6 +2144,34 @@ export default function ChatPage() {
           )}
         </DialogContent>
       </Dialog>
+
+      {lightboxImageUrl && (
+        <div
+          className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-6"
+          onClick={() => setLightboxImageUrl(null)}
+        >
+          <button
+            className="absolute top-4 right-4 text-white/80 hover:text-white"
+            onClick={() => setLightboxImageUrl(null)}
+          >
+            <X className="w-6 h-6" />
+          </button>
+          <a
+            href={lightboxImageUrl}
+            download
+            onClick={(e) => e.stopPropagation()}
+            className="absolute top-4 right-16 text-white/80 hover:text-white"
+          >
+            <Download className="w-6 h-6" />
+          </a>
+          <img
+            src={lightboxImageUrl || "/placeholder.svg"}
+            alt="Full size"
+            className="max-w-full max-h-full object-contain rounded"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
     </div>
   )
 }
