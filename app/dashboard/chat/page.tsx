@@ -246,6 +246,7 @@ export default function ChatPage() {
   const lastTypingSentRef = useRef<number>(0)
   const typingTimeoutsRef = useRef<Record<string, NodeJS.Timeout>>({})
   const roomChannelRef = useRef<RealtimeChannel | null>(null)
+  const mediaUrlCacheRef = useRef<Record<string, string>>({})
 
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
@@ -288,6 +289,7 @@ export default function ChatPage() {
   const [addMemberQuery, setAddMemberQuery] = useState("")
   const [addMemberResults, setAddMemberResults] = useState<SearchUser[]>([])
   const [reactions, setReactions] = useState<Record<string, { emoji: string; userIds: string[] }[]>>({})
+  const [resolvedMediaUrls, setResolvedMediaUrls] = useState<Record<string, string>>({})
   const [openReactionPickerFor, setOpenReactionPickerFor] = useState<string | null>(null)
   const [forwardingMessage, setForwardingMessage] = useState<Message | null>(null)
   const [showCallLog, setShowCallLog] = useState(false)
@@ -363,6 +365,49 @@ export default function ChatPage() {
     },
     [supabase],
   )
+
+  // chat-files/chat-uploads are private buckets (SELECT gated to
+  // authenticated via storage RLS), so the getPublicUrl() string stashed on
+  // the message at send-time 404s ("Bucket not found") when hit directly by
+  // an <img>/<video>/<audio> tag with no auth header. Swap it for a signed
+  // URL at render time instead of flipping the buckets public.
+  const resolveMediaUrl = useCallback(
+    async (fileUrl: string): Promise<string> => {
+      if (mediaUrlCacheRef.current[fileUrl]) return mediaUrlCacheRef.current[fileUrl]
+
+      const match = fileUrl.match(/\/storage\/v1\/object\/public\/([^/]+)\/(.+)$/)
+      if (!match) return fileUrl
+
+      const bucket = match[1]
+      const path = decodeURIComponent(match[2])
+      const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, 21600)
+      if (error || !data?.signedUrl) return fileUrl
+
+      mediaUrlCacheRef.current[fileUrl] = data.signedUrl
+      return data.signedUrl
+    },
+    [supabase],
+  )
+
+  useEffect(() => {
+    const targets = messages.filter((m) => m.file_url && !resolvedMediaUrls[m.file_url])
+    if (targets.length === 0) return
+
+    let cancelled = false
+    ;(async () => {
+      const updates: Record<string, string> = {}
+      await Promise.all(
+        targets.map(async (m) => {
+          updates[m.file_url!] = await resolveMediaUrl(m.file_url!)
+        }),
+      )
+      if (!cancelled) setResolvedMediaUrls((prev) => ({ ...prev, ...updates }))
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [messages, resolveMediaUrl])
 
   const refreshRoomsMeta = useCallback(
     async (rooms: ChatRoom[], userId: string) => {
@@ -1730,26 +1775,47 @@ export default function ChatPage() {
                                 {message.message_type === "image" && message.file_url && (
                                   <button
                                     type="button"
-                                    onClick={() => setLightboxImageUrl(message.file_url!)}
+                                    onClick={() => setLightboxImageUrl(resolvedMediaUrls[message.file_url!] || message.file_url!)}
                                     className="rounded-lg overflow-hidden block cursor-zoom-in"
                                   >
-                                    <img src={message.file_url || "/placeholder.svg"} alt={message.file_name} className="max-w-xs h-auto" />
+                                    {resolvedMediaUrls[message.file_url] ? (
+                                      <img src={resolvedMediaUrls[message.file_url]} alt={message.file_name} className="max-w-xs h-auto" />
+                                    ) : (
+                                      <div className="w-48 h-32 rounded-lg bg-muted flex items-center justify-center">
+                                        <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+                                      </div>
+                                    )}
                                   </button>
                                 )}
                                 {message.message_type === "video" && message.file_url && (
                                   <div className="rounded-lg overflow-hidden max-w-xs">
-                                    <video controls className="w-full h-auto" src={message.file_url} />
+                                    {resolvedMediaUrls[message.file_url] ? (
+                                      <video controls className="w-full h-auto" src={resolvedMediaUrls[message.file_url]} />
+                                    ) : (
+                                      <div className="w-48 h-32 rounded-lg bg-muted flex items-center justify-center">
+                                        <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+                                      </div>
+                                    )}
                                   </div>
                                 )}
                                 {message.message_type === "file" && message.file_url && (
-                                  <a href={message.file_url} download className={`p-3 rounded-lg flex items-center gap-2 ${isOwn ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
+                                  <a
+                                    href={resolvedMediaUrls[message.file_url] || message.file_url}
+                                    download
+                                    className={`p-3 rounded-lg flex items-center gap-2 ${isOwn ? "bg-primary text-primary-foreground" : "bg-muted"}`}
+                                  >
                                     <FileUp className="w-4 h-4" />
                                     <span className="text-sm truncate">{message.file_name}</span>
                                     <Download className="w-4 h-4" />
                                   </a>
                                 )}
-                                {message.message_type === "voice" && message.file_url && (
-                                  <VoiceBubble url={message.file_url} isOwn={isOwn} />
+                                {message.message_type === "voice" && message.file_url && resolvedMediaUrls[message.file_url] && (
+                                  <VoiceBubble url={resolvedMediaUrls[message.file_url]} isOwn={isOwn} />
+                                )}
+                                {message.message_type === "voice" && message.file_url && !resolvedMediaUrls[message.file_url] && (
+                                  <div className="p-2.5 rounded-lg w-56 h-12 bg-muted flex items-center justify-center">
+                                    <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                                  </div>
                                 )}
                               </>
                             )}
