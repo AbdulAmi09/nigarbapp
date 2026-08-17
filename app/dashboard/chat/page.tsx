@@ -94,10 +94,20 @@ interface OnlineMember {
   groupRole?: string
 }
 
+interface ChatProfile {
+  id: string
+  first_name: string | null
+  last_name: string | null
+  avatar_url: string | null
+  arbiter_level: string | null
+  role: string | null
+  last_seen_at: string | null
+}
+
 interface SearchUser {
   id: string
   name: string
-  email: string
+  email: string | null
   avatar_url: string | null
   arbiter_category: string
   fide_id: string | null
@@ -119,12 +129,6 @@ const MESSAGE_SELECT = `
   reply_to,
   is_deleted,
   is_edited,
-  profiles:sender_id (
-    first_name,
-    last_name,
-    avatar_url,
-    arbiter_level
-  ),
   reply_message:reply_to (
     content,
     message_type
@@ -308,14 +312,14 @@ export default function ChatPage() {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
   )
 
-  const formatMessage = (msg: any): Message => ({
+  const formatMessage = (msg: any, profile?: ChatProfile): Message => ({
     id: msg.id,
     content: msg.content || "",
     created_at: msg.created_at,
     sender_id: msg.sender_id,
-    sender_name: `${msg.profiles?.first_name || ""} ${msg.profiles?.last_name || ""}`.trim() || "Unknown",
-    sender_avatar: msg.profiles?.avatar_url || null,
-    sender_role: msg.profiles?.arbiter_level || null,
+    sender_name: `${profile?.first_name || ""} ${profile?.last_name || ""}`.trim() || "Unknown",
+    sender_avatar: profile?.avatar_url || null,
+    sender_role: profile?.arbiter_level || null,
     message_type: msg.message_type || "text",
     file_url: msg.file_url,
     file_name: msg.file_name,
@@ -345,6 +349,20 @@ export default function ChatPage() {
       body: JSON.stringify({ roomId, messageId, preview }),
     }).catch(() => {})
   }, [])
+
+  const fetchProfilesMap = useCallback(
+    async (ids: string[]): Promise<Record<string, ChatProfile>> => {
+      const unique = Array.from(new Set(ids.filter(Boolean)))
+      if (unique.length === 0) return {}
+      const { data } = await supabase.rpc("get_profiles_for_chat", { p_ids: unique })
+      const map: Record<string, ChatProfile> = {}
+      data?.forEach((p: ChatProfile) => {
+        map[p.id] = p
+      })
+      return map
+    },
+    [supabase],
+  )
 
   const refreshRoomsMeta = useCallback(
     async (rooms: ChatRoom[], userId: string) => {
@@ -516,7 +534,8 @@ export default function ChatPage() {
           const { data } = await supabase.from("chat_messages").select(MESSAGE_SELECT).eq("id", payload.new.id).single()
 
           if (data) {
-            const newMsg = formatMessage(data)
+            const profileMap = await fetchProfilesMap([data.sender_id])
+            const newMsg = formatMessage(data, profileMap[data.sender_id])
             setMessages((prev) => [...prev, newMsg])
             setNewMessagesCount((prev) => prev + 1)
             setShowNewMessagesButton(true)
@@ -577,7 +596,8 @@ export default function ChatPage() {
       .limit(50)
 
     if (data) {
-      setMessages(data.map(formatMessage))
+      const profileMap = await fetchProfilesMap(data.map((m: any) => m.sender_id))
+      setMessages(data.map((m: any) => formatMessage(m, profileMap[m.sender_id])))
       fetchReactions(data.map((m: any) => m.id))
       setTimeout(() => scrollToBottom(), 100)
     }
@@ -668,9 +688,9 @@ export default function ChatPage() {
 
     if (data) {
       const peerIds = Array.from(new Set(data.map((c: any) => (c.caller_id === currentUserId ? c.callee_id : c.caller_id))))
-      const { data: profiles } = await supabase.from("profiles").select("id, first_name, last_name").in("id", peerIds)
+      const profileMap = await fetchProfilesMap(peerIds)
       const nameMap: Record<string, string> = {}
-      profiles?.forEach((p: any) => {
+      Object.values(profileMap).forEach((p) => {
         nameMap[p.id] = `${p.first_name || ""} ${p.last_name || ""}`.trim() || "Unknown"
       })
 
@@ -731,7 +751,8 @@ export default function ChatPage() {
         .order("created_at", { ascending: false })
         .limit(50)
       if (data) {
-        const loaded = data.map(formatMessage).reverse()
+        const profileMap = await fetchProfilesMap(data.map((m: any) => m.sender_id))
+        const loaded = data.map((m: any) => formatMessage(m, profileMap[m.sender_id])).reverse()
         setMessages(loaded)
         fetchReactions(loaded.map((m) => m.id))
       }
@@ -750,36 +771,25 @@ export default function ChatPage() {
       setOtherUserLastSeen(null)
       return
     }
-    const { data } = await supabase.from("profiles").select("last_seen_at").eq("id", otherId).single()
-    setOtherUserLastSeen(data?.last_seen_at || null)
+    const profileMap = await fetchProfilesMap([otherId])
+    setOtherUserLastSeen(profileMap[otherId]?.last_seen_at || null)
   }
 
   async function fetchRoomMembers(room: ChatRoom) {
-    const { data } = await supabase
-      .from("group_members")
-      .select(
-        `
-        user_id,
-        role,
-        profiles:user_id (
-          first_name,
-          last_name,
-          avatar_url,
-          arbiter_level
-        )
-      `,
-      )
-      .eq("group_id", room.id)
-      .limit(50)
+    const { data } = await supabase.from("group_members").select("user_id, role").eq("group_id", room.id).limit(50)
 
     if (data) {
-      const members: OnlineMember[] = data.map((member: any) => ({
-        id: member.user_id,
-        name: `${member.profiles?.first_name || ""} ${member.profiles?.last_name || ""}`.trim() || "Unknown",
-        role: member.profiles?.arbiter_level || null,
-        avatar_url: member.profiles?.avatar_url || null,
-        groupRole: member.role,
-      }))
+      const profileMap = await fetchProfilesMap(data.map((m: any) => m.user_id))
+      const members: OnlineMember[] = data.map((member: any) => {
+        const p = profileMap[member.user_id]
+        return {
+          id: member.user_id,
+          name: `${p?.first_name || ""} ${p?.last_name || ""}`.trim() || "Unknown",
+          role: p?.arbiter_level || null,
+          avatar_url: p?.avatar_url || null,
+          groupRole: member.role,
+        }
+      })
       setRoomMembers(members)
     }
   }
@@ -1250,8 +1260,8 @@ export default function ChatPage() {
       setReaderNames([])
       return
     }
-    const { data } = await supabase.from("profiles").select("id, first_name, last_name").in("id", otherReaders)
-    setReaderNames((data || []).map((p: any) => `${p.first_name || ""} ${p.last_name || ""}`.trim() || "Unknown"))
+    const profileMap = await fetchProfilesMap(otherReaders)
+    setReaderNames(Object.values(profileMap).map((p) => `${p.first_name || ""} ${p.last_name || ""}`.trim() || "Unknown"))
   }
 
   async function handleRoomChange(room: ChatRoom) {
