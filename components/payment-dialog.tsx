@@ -132,14 +132,17 @@ export default function PaymentDialog({ open, onOpenChange, userEmail, onPayment
       } = await supabase.auth.getUser()
       if (!user) return
 
-      // Create payment record first
+      // Create payment record first. For annual_dues/checkoff/penalty, the
+      // database overrides this amount with the real amount owed from
+      // payment_due regardless of what's sent here -- this local value is
+      // only used as-is for donation/certification.
       const { data: payment, error: paymentError } = await supabase
         .from("payments")
         .insert({
           arbiter_id: user.id,
           amount: Number.parseFloat(amount),
           payment_type: selectedType,
-          payment_status: "processing",
+          payment_status: "pending",
           description: details || PAYMENT_TYPES.find((t) => t.id === selectedType)?.label,
         })
         .select()
@@ -151,8 +154,6 @@ export default function PaymentDialog({ open, onOpenChange, userEmail, onPayment
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          amount: Number.parseFloat(amount),
-          email: userEmail,
           payment_id: payment.id,
           metadata: {
             payment_type: selectedType,
@@ -227,6 +228,18 @@ export default function PaymentDialog({ open, onOpenChange, userEmail, onPayment
 
         {step === "method" && selectedType && (
           <div className="space-y-4">
+            {selectedType !== "donation" && selectedType !== "certification" && paymentDue && (
+              <Card className="p-4 bg-muted">
+                <p className="text-sm text-muted-foreground">Amount due</p>
+                <p className="text-2xl font-semibold">₦{Number(paymentDue.amount).toLocaleString()}</p>
+                {paymentDue.due_date && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Due {new Date(paymentDue.due_date).toLocaleDateString()}
+                  </p>
+                )}
+              </Card>
+            )}
+
             {(selectedType === "donation" || selectedType === "certification") && (
               <div className="space-y-4">
                 <div>
@@ -272,7 +285,7 @@ export default function PaymentDialog({ open, onOpenChange, userEmail, onPayment
                       id="receipt"
                       type="file"
                       className="hidden"
-                      onChange={(e) => setReceipt(e.files?.[0] || null)}
+                      onChange={(e) => setReceipt(e.target.files?.[0] || null)}
                       accept="image/*,application/pdf"
                     />
                     {receipt ? (

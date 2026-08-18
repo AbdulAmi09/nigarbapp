@@ -12,7 +12,25 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    const { amount, email, payment_id, metadata } = await request.json()
+    const { payment_id, metadata } = await request.json()
+
+    // The amount to charge always comes from the payments row itself, never
+    // from the client -- otherwise a tampered request could pay any amount
+    // it likes for a real due. Ownership is enforced by RLS (arbiter_id).
+    const { data: payment, error: paymentError } = await supabase
+      .from("payments")
+      .select("id, amount, payment_status")
+      .eq("id", payment_id)
+      .eq("arbiter_id", user.id)
+      .single()
+
+    if (paymentError || !payment) {
+      return NextResponse.json({ error: "Payment not found" }, { status: 404 })
+    }
+
+    if (payment.payment_status !== "pending") {
+      return NextResponse.json({ error: "This payment is not awaiting payment" }, { status: 400 })
+    }
 
     // Initialize Paystack transaction
     const response = await fetch("https://api.paystack.co/transaction/initialize", {
@@ -22,8 +40,8 @@ export async function POST(request: NextRequest) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        email,
-        amount: amount * 100, // Paystack expects amount in kobo
+        email: user.email,
+        amount: Math.round(Number(payment.amount) * 100), // Paystack expects amount in kobo
         callback_url: `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/dashboard/payments/callback`,
         metadata: {
           payment_id,
@@ -39,17 +57,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: data.message }, { status: 400 })
     }
 
-    // Update payment with transaction reference
-    const { error: updateError } = await supabase
-      .from("payments")
-      .update({
-        transaction_reference: data.data.reference,
-        payment_status: "processing",
-      })
-      .eq("id", payment_id)
+    const { error: rpcError } = await supabase.rpc("mark_payment_processing", {
+      p_payment_id: payment_id,
+      p_reference: data.data.reference,
+    })
 
-    if (updateError) {
-      console.error("[v0] Payment update error:", updateError)
+    if (rpcError) {
+      console.error("[v0] Payment update error:", rpcError)
     }
 
     return NextResponse.json({

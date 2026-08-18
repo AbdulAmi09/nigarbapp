@@ -4,7 +4,26 @@ import { type NextRequest, NextResponse } from "next/server"
 export async function POST(request: NextRequest) {
   try {
     const supabase = await createClient()
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    }
+
     const { reference } = await request.json()
+
+    const { data: payment } = await supabase
+      .from("payments")
+      .select("id")
+      .eq("transaction_reference", reference)
+      .eq("arbiter_id", user.id)
+      .single()
+
+    if (!payment) {
+      return NextResponse.json({ error: "Payment not found" }, { status: 404 })
+    }
 
     // Verify transaction with Paystack
     const response = await fetch(`https://api.paystack.co/transaction/verify/${reference}`, {
@@ -21,60 +40,31 @@ export async function POST(request: NextRequest) {
 
     const transaction = data.data
 
-    if (transaction.status === "success") {
-      // Update payment record
-      const { data: updatedPayment, error: updateError } = await supabase
-        .from("payments")
-        .update({
-          payment_status: "paid",
-          paid_date: new Date().toISOString(),
-          payment_method: transaction.channel,
-        })
-        .eq("transaction_reference", reference)
-        .select("id")
-        .single()
+    // Route through the same SECURITY DEFINER path the webhook uses, so the
+    // amount is verified against what's owed and the audit trail/
+    // notification fire regardless of which path (webhook or this
+    // client-triggered callback) completes first.
+    const { error: rpcError } = await supabase.rpc("record_paystack_payment", {
+      p_reference: reference,
+      p_payment_id: payment.id,
+      p_amount: transaction.amount / 100,
+      p_customer_email: transaction.customer?.email ?? null,
+      p_authorization_code: transaction.authorization?.authorization_code ?? null,
+      p_last_four: transaction.authorization?.last4 ?? null,
+      p_channel: transaction.authorization?.channel ?? null,
+      p_status: transaction.status === "success" ? "success" : "failed",
+    })
 
-      if (updateError) {
-        console.error("[v0] Payment verify update error:", updateError)
-        return NextResponse.json({ error: "Failed to record verified payment" }, { status: 500 })
-      }
-
-      if (updatedPayment) {
-        await supabase
-          .from("event_registrations")
-          .update({ payment_status: "paid" })
-          .eq("payment_id", updatedPayment.id)
-      }
-
-      return NextResponse.json({
-        success: true,
-        message: "Payment verified successfully",
-        transaction,
-      })
-    } else {
-      const { data: updatedPayment, error: updateError } = await supabase
-        .from("payments")
-        .update({ payment_status: "cancelled" })
-        .eq("transaction_reference", reference)
-        .select("id")
-        .single()
-
-      if (updateError) {
-        console.error("[v0] Payment verify update error:", updateError)
-      }
-
-      if (updatedPayment) {
-        await supabase
-          .from("event_registrations")
-          .update({ status: "cancelled", cancelled_at: new Date().toISOString() })
-          .eq("payment_id", updatedPayment.id)
-      }
-
-      return NextResponse.json({
-        success: false,
-        message: "Payment verification failed",
-      })
+    if (rpcError) {
+      console.error("[v0] Payment verify RPC error:", rpcError)
+      return NextResponse.json({ error: "Failed to record verified payment" }, { status: 500 })
     }
+
+    return NextResponse.json({
+      success: transaction.status === "success",
+      message: transaction.status === "success" ? "Payment verified successfully" : "Payment verification failed",
+      transaction,
+    })
   } catch (error) {
     console.error("Payment verification error:", error)
     return NextResponse.json({ error: "Failed to verify payment" }, { status: 500 })
