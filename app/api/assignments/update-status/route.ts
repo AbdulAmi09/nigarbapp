@@ -38,6 +38,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: updateError.message }, { status: 500 })
     }
 
+    // Clear the Accept/Decline prompt on the originating notification so it
+    // doesn't keep showing (and being re-clickable) after it's been handled.
+    await supabase
+      .from("notifications")
+      .update({ action_required: false })
+      .eq("related_id", assignmentId)
+      .eq("action_type", "Tournament_assignment")
+      .eq("recipient_id", user.id)
+
     // Create notification for the action
     await supabase.from("notifications").insert({
       recipient_id: user.id,

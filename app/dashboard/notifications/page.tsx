@@ -1,24 +1,8 @@
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Bell, Trophy, Calendar, MessageSquare, Settings, CheckCheck } from "lucide-react"
 import { createClient } from "@/lib/supabase/server"
 import { redirect } from "next/navigation"
-import Link from "next/link"
-import NotificationItemClient from "@/components/notification-item-client"
-import MarkAllReadButton from "@/components/mark-all-read-button"
+import NotificationsPanel from "@/components/notifications-panel"
 
-async function getNotifications(userId: string) {
-  const supabase = await createClient()
-
-  const { data: notifications } = await supabase
-    .from("notifications")
-    .select("*")
-    .eq("recipient_id", userId)
-    .order("created_at", { ascending: false })
-
-  return notifications || []
-}
+const PAGE_SIZE = 50
 
 export default async function NotificationsPage() {
   const supabase = await createClient()
@@ -31,188 +15,44 @@ export default async function NotificationsPage() {
     redirect("/auth/login")
   }
 
-  const notifications = await getNotifications(user.id)
+  const weekAgo = new Date()
+  weekAgo.setDate(weekAgo.getDate() - 7)
 
-  const unreadCount = notifications.filter((n) => !n.is_read).length
+  const [{ data: notifications }, totalRes, unreadRes, actionRequiredRes, thisWeekRes] = await Promise.all([
+    supabase
+      .from("notifications")
+      .select("*")
+      .eq("recipient_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(PAGE_SIZE),
+    supabase.from("notifications").select("id", { count: "exact", head: true }).eq("recipient_id", user.id),
+    supabase
+      .from("notifications")
+      .select("id", { count: "exact", head: true })
+      .eq("recipient_id", user.id)
+      .eq("is_read", false),
+    supabase
+      .from("notifications")
+      .select("id", { count: "exact", head: true })
+      .eq("recipient_id", user.id)
+      .eq("action_required", true),
+    supabase
+      .from("notifications")
+      .select("id", { count: "exact", head: true })
+      .eq("recipient_id", user.id)
+      .gte("created_at", weekAgo.toISOString()),
+  ])
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-balance">Notifications</h1>
-          <p className="text-muted-foreground text-pretty">
-            Stay updated with your latest activities and announcements.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <MarkAllReadButton userId={user.id} />
-          <Button variant="outline" size="sm" asChild>
-            <Link href="/dashboard/settings">
-              <Settings className="w-4 h-4 mr-2" />
-              Settings
-            </Link>
-          </Button>
-        </div>
-      </div>
-
-      {/* Summary Cards */}
-      <div className="grid gap-4 md:grid-cols-4">
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">Unread</p>
-                <p className="text-2xl font-bold">{unreadCount}</p>
-              </div>
-              <Bell className="h-8 w-8 text-muted-foreground" />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">Action Required</p>
-                <p className="text-2xl font-bold">{notifications.filter((n) => n.action_required).length}</p>
-              </div>
-              <Trophy className="h-8 w-8 text-muted-foreground" />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">This Week</p>
-                <p className="text-2xl font-bold">
-                  {
-                    notifications.filter((n) => {
-                      const weekAgo = new Date()
-                      weekAgo.setDate(weekAgo.getDate() - 7)
-                      return new Date(n.created_at) > weekAgo
-                    }).length
-                  }
-                </p>
-              </div>
-              <Calendar className="h-8 w-8 text-muted-foreground" />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">Total</p>
-                <p className="text-2xl font-bold">{notifications.length}</p>
-              </div>
-              <MessageSquare className="h-8 w-8 text-muted-foreground" />
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      <Tabs defaultValue="all" className="space-y-4">
-        <TabsList>
-          <TabsTrigger value="all">All Notifications</TabsTrigger>
-          <TabsTrigger value="unread">Unread ({unreadCount})</TabsTrigger>
-          <TabsTrigger value="assignments">Assignments</TabsTrigger>
-          <TabsTrigger value="payments">Payments</TabsTrigger>
-          <TabsTrigger value="system">System</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="all" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>All Notifications</CardTitle>
-              <CardDescription>Complete list of your notifications and updates</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {notifications.length > 0 ? (
-                notifications.map((notification) => (
-                  <NotificationItemClient key={notification.id} notification={notification} />
-                ))
-              ) : (
-                <p className="text-muted-foreground text-center py-8">No notifications found</p>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="unread" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Unread Notifications</CardTitle>
-              <CardDescription>Notifications that require your attention</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {notifications.filter((n) => !n.is_read).length > 0 ? (
-                notifications
-                  .filter((n) => !n.is_read)
-                  .map((notification) => <NotificationItemClient key={notification.id} notification={notification} />)
-              ) : (
-                <p className="text-muted-foreground text-center py-8">No unread notifications</p>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="assignments" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Assignment Notifications</CardTitle>
-              <CardDescription>Tournament assignments and related updates</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {notifications.filter((n) => n.notification_type?.toLowerCase() === "assignment").length > 0 ? (
-                notifications
-                  .filter((n) => n.notification_type?.toLowerCase() === "assignment")
-                  .map((notification) => <NotificationItemClient key={notification.id} notification={notification} />)
-              ) : (
-                <p className="text-muted-foreground text-center py-8">No assignment notifications</p>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="payments" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Payment Notifications</CardTitle>
-              <CardDescription>Payment processing and financial updates</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {notifications.filter((n) => n.notification_type?.toLowerCase() === "payment").length > 0 ? (
-                notifications
-                  .filter((n) => n.notification_type?.toLowerCase() === "payment")
-                  .map((notification) => <NotificationItemClient key={notification.id} notification={notification} />)
-              ) : (
-                <p className="text-muted-foreground text-center py-8">No payment notifications</p>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="system" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>System Notifications</CardTitle>
-              <CardDescription>System updates and maintenance announcements</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {notifications.filter((n) => n.notification_type?.toLowerCase() === "system").length > 0 ? (
-                notifications
-                  .filter((n) => n.notification_type?.toLowerCase() === "system")
-                  .map((notification) => <NotificationItemClient key={notification.id} notification={notification} />)
-              ) : (
-                <p className="text-muted-foreground text-center py-8">No system notifications</p>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
-    </div>
+    <NotificationsPanel
+      userId={user.id}
+      initialNotifications={notifications || []}
+      initialCounts={{
+        total: totalRes.count || 0,
+        unread: unreadRes.count || 0,
+        actionRequired: actionRequiredRes.count || 0,
+        thisWeek: thisWeekRes.count || 0,
+      }}
+    />
   )
 }
