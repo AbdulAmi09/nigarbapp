@@ -48,12 +48,14 @@ export default async function CommitteeWorkspacePage({ params }: { params: { slu
         submitter:submitted_by (first_name, last_name, avatar_url)
       `)
       .eq("committee_id", committee.id)
-      .order("created_at", { ascending: false }),
+      .order("created_at", { ascending: false })
+      .limit(20),
     supabase
       .from("committee_documents")
       .select("*")
       .eq("committee_id", committee.id)
-      .order("created_at", { ascending: false }),
+      .order("created_at", { ascending: false })
+      .limit(20),
   ])
 
   return (

@@ -19,6 +19,7 @@ import { Label } from "@/components/ui/label"
 import { Users, FileText, ArrowRight, Download, Loader2, Upload, CheckCircle2 } from "lucide-react"
 import Link from "next/link"
 import { createBrowserClient } from "@supabase/ssr"
+import { useRouter } from "next/navigation"
 
 interface Person {
   first_name: string | null
@@ -52,6 +53,22 @@ interface CommitteeDocument {
   is_public: boolean
 }
 
+interface MyCase {
+  id: string
+  request_type: string
+  message: string
+  status: string
+  resolution_note: string | null
+  created_at: string
+  committee: { name: string } | null
+}
+
+const CASE_STATUS_COLORS: Record<string, string> = {
+  open: "bg-yellow-500/10 text-yellow-600",
+  in_progress: "bg-blue-500/10 text-blue-600",
+  resolved: "bg-green-500/10 text-green-600",
+}
+
 function personName(p: Person | null) {
   if (!p) return null
   const name = `${p.first_name || ""} ${p.last_name || ""}`.trim()
@@ -75,10 +92,12 @@ export default function CommitteeDirectoryPanel({
   userId,
   committees,
   publicDocuments,
+  myCases,
 }: {
   userId: string
   committees: Committee[]
   publicDocuments: CommitteeDocument[]
+  myCases: MyCase[]
 }) {
   const [detailsCommittee, setDetailsCommittee] = useState<Committee | null>(null)
   const [contactCommittee, setContactCommittee] = useState<Committee | null>(null)
@@ -167,6 +186,36 @@ export default function CommitteeDirectoryPanel({
           )}
         </div>
       </div>
+
+      {myCases.length > 0 && (
+        <div className="space-y-3">
+          <h2 className="text-lg font-semibold">My Requests</h2>
+          <Card>
+            <CardContent className="pt-6 space-y-3">
+              {myCases.map((c) => (
+                <div key={c.id} className="border rounded-lg p-4 space-y-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <p className="font-medium text-sm">{c.request_type}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {c.committee?.name || "Committee"} -- {new Date(c.created_at).toLocaleDateString()}
+                      </p>
+                    </div>
+                    <Badge className={CASE_STATUS_COLORS[c.status]}>{c.status.replace("_", " ")}</Badge>
+                  </div>
+                  <p className="text-sm text-muted-foreground">{c.message}</p>
+                  {c.resolution_note && (
+                    <p className="text-sm bg-muted rounded-md p-2">
+                      <span className="font-medium">Response: </span>
+                      {c.resolution_note}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       <CommitteeDetailsModal
         committee={detailsCommittee}
@@ -271,6 +320,7 @@ function CommitteeDetailsModal({
 }
 
 function ContactCommitteeModal({ committee, onClose }: { committee: Committee | null; onClose: () => void }) {
+  const router = useRouter()
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -322,6 +372,7 @@ function ContactCommitteeModal({ committee, onClose }: { committee: Committee | 
       }
 
       setSubmitted(true)
+      router.refresh()
     } catch (e: any) {
       setError(e.message || "Something went wrong. Please try again.")
     } finally {
@@ -354,7 +405,8 @@ function ContactCommitteeModal({ committee, onClose }: { committee: Committee | 
                 <CheckCircle2 className="w-10 h-10 text-green-500 mx-auto" />
                 <p className="font-medium">Your request has been submitted</p>
                 <p className="text-sm text-muted-foreground">
-                  The committee will review it and follow up as needed.
+                  You'll be notified here when the committee responds. Track it anytime under "My Requests" on this
+                  page.
                 </p>
               </div>
             ) : (

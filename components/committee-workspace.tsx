@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
 import {
   ArrowLeft,
   Calendar,
@@ -22,10 +23,17 @@ import {
   Upload,
   Loader2,
   Paperclip,
+  ChevronDown,
+  ChevronUp,
+  UserPlus,
+  X,
+  Search,
 } from "lucide-react"
 import Link from "next/link"
 import { createBrowserClient } from "@supabase/ssr"
 import { useRouter } from "next/navigation"
+
+const PAGE_SIZE = 20
 
 interface Profile {
   id: string
@@ -33,6 +41,13 @@ interface Profile {
   last_name: string | null
   avatar_url: string | null
   arbiter_level?: string | null
+}
+
+interface CaseNote {
+  id: string
+  note: string
+  created_at: string
+  author: Profile | null
 }
 
 interface CommitteeCase {
@@ -100,7 +115,7 @@ export default function CommitteeWorkspace({
   userId,
   role,
   isOfficer,
-  roster,
+  roster: initialRoster,
   cases: initialCases,
   documents: initialDocuments,
 }: {
@@ -120,15 +135,17 @@ export default function CommitteeWorkspace({
 
   const [cases, setCases] = useState(initialCases)
   const [documents, setDocuments] = useState(initialDocuments)
+  const [docCategory, setDocCategory] = useState("all")
+  const [hasMoreCases, setHasMoreCases] = useState(initialCases.length === PAGE_SIZE)
+  const [hasMoreDocs, setHasMoreDocs] = useState(initialDocuments.length === PAGE_SIZE)
+  const [loadingMoreCases, setLoadingMoreCases] = useState(false)
+  const [loadingMoreDocs, setLoadingMoreDocs] = useState(false)
   const [meetingDialogOpen, setMeetingDialogOpen] = useState(false)
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false)
+  const [descDialogOpen, setDescDialogOpen] = useState(false)
+  const [addMemberOpen, setAddMemberOpen] = useState(false)
 
   async function handleDownloadDoc(path: string) {
-    const { data } = await supabase.storage.from("committee-files").createSignedUrl(path, 60)
-    if (data?.signedUrl) window.open(data.signedUrl, "_blank", "noopener,noreferrer")
-  }
-
-  async function handleDownloadAttachment(path: string) {
     const { data } = await supabase.storage.from("committee-files").createSignedUrl(path, 60)
     if (data?.signedUrl) window.open(data.signedUrl, "_blank", "noopener,noreferrer")
   }
@@ -147,13 +164,62 @@ export default function CommitteeWorkspace({
       .eq("id", caseId)
   }
 
-  const chairman = roster.find((p) => p.id === committee.chairman_id)
-  const secretary = roster.find((p) => p.id === committee.secretary_id)
-  const members = roster.filter((p) => p.id !== committee.chairman_id && p.id !== committee.secretary_id)
+  async function handleLoadMoreCases() {
+    if (cases.length === 0) return
+    setLoadingMoreCases(true)
+    try {
+      const oldest = cases[cases.length - 1].created_at
+      const { data } = await supabase
+        .from("committee_cases")
+        .select(`
+          id, request_type, message, status, attachment_path, resolution_note, created_at, resolved_at,
+          submitter:submitted_by (first_name, last_name, avatar_url)
+        `)
+        .eq("committee_id", committee.id)
+        .lt("created_at", oldest)
+        .order("created_at", { ascending: false })
+        .limit(PAGE_SIZE)
+
+      if (data) {
+        setCases((prev) => [...prev, ...(data as any)])
+        setHasMoreCases(data.length === PAGE_SIZE)
+      }
+    } finally {
+      setLoadingMoreCases(false)
+    }
+  }
+
+  async function handleLoadMoreDocs() {
+    if (documents.length === 0) return
+    setLoadingMoreDocs(true)
+    try {
+      const oldest = documents[documents.length - 1].created_at
+      const { data } = await supabase
+        .from("committee_documents")
+        .select("*")
+        .eq("committee_id", committee.id)
+        .lt("created_at", oldest)
+        .order("created_at", { ascending: false })
+        .limit(PAGE_SIZE)
+
+      if (data) {
+        setDocuments((prev) => [...prev, ...data])
+        setHasMoreDocs(data.length === PAGE_SIZE)
+      }
+    } finally {
+      setLoadingMoreDocs(false)
+    }
+  }
+
+  const chairman = initialRoster.find((p) => p.id === committee.chairman_id)
+  const secretary = initialRoster.find((p) => p.id === committee.secretary_id)
+  const members = initialRoster.filter((p) => p.id !== committee.chairman_id && p.id !== committee.secretary_id)
+
+  const visibleDocuments = docCategory === "all" ? documents : documents.filter((d) => d.category === docCategory)
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-start justify-between">
         <div>
           <Button variant="ghost" size="sm" asChild className="mb-2 -ml-2">
             <Link href="/dashboard/committee">
@@ -162,9 +228,16 @@ export default function CommitteeWorkspace({
             </Link>
           </Button>
           <h1 className="text-3xl font-bold text-balance">{committee.name}</h1>
-          <p className="text-muted-foreground text-pretty">{committee.description || committee.purpose}</p>
+          <div className="flex items-center gap-2 mt-1">
+            <p className="text-muted-foreground text-pretty">{committee.description || committee.purpose}</p>
+            {isOfficer && (
+              <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={() => setDescDialogOpen(true)}>
+                <Pencil className="w-3.5 h-3.5" />
+              </Button>
+            )}
+          </div>
         </div>
-        <Badge className="text-sm">{role}</Badge>
+        <Badge className="text-sm shrink-0">{role}</Badge>
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">
@@ -208,7 +281,7 @@ export default function CommitteeWorkspace({
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Roster</CardTitle>
-            <CardDescription>{roster.length} people</CardDescription>
+            <CardDescription>{initialRoster.length} people</CardDescription>
           </CardHeader>
         </Card>
       </div>
@@ -229,68 +302,54 @@ export default function CommitteeWorkspace({
             </Card>
           ) : (
             cases.map((c) => (
-              <Card key={c.id}>
-                <CardContent className="pt-6 space-y-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-3">
-                      <Avatar className="w-8 h-8">
-                        <AvatarImage src={c.submitter?.avatar_url || "/placeholder.svg"} />
-                        <AvatarFallback>{initials(c.submitter)}</AvatarFallback>
-                      </Avatar>
-                      <div>
-                        <p className="font-medium text-sm">{c.request_type}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {name(c.submitter)} -- {new Date(c.created_at).toLocaleDateString()}
-                        </p>
-                      </div>
-                    </div>
-                    {isOfficer ? (
-                      <Select value={c.status} onValueChange={(v) => handleStatusChange(c.id, v)}>
-                        <SelectTrigger className="w-[140px] h-8">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="open">Open</SelectItem>
-                          <SelectItem value="in_progress">In Progress</SelectItem>
-                          <SelectItem value="resolved">Resolved</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    ) : (
-                      <Badge className={STATUS_COLORS[c.status]}>{c.status.replace("_", " ")}</Badge>
-                    )}
-                  </div>
-                  <p className="text-sm">{c.message}</p>
-                  {c.attachment_path && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleDownloadAttachment(c.attachment_path!)}
-                    >
-                      <Paperclip className="w-4 h-4 mr-2" />
-                      View Attachment
-                    </Button>
-                  )}
-                </CardContent>
-              </Card>
+              <CaseCard
+                key={c.id}
+                committeeCase={c}
+                committeeId={committee.id}
+                isOfficer={isOfficer}
+                onStatusChange={handleStatusChange}
+                onDownloadAttachment={() => c.attachment_path && handleDownloadDoc(c.attachment_path)}
+                supabase={supabase}
+              />
             ))
+          )}
+          {hasMoreCases && (
+            <div className="flex justify-center">
+              <Button variant="outline" size="sm" onClick={handleLoadMoreCases} disabled={loadingMoreCases}>
+                {loadingMoreCases && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                Load older cases
+              </Button>
+            </div>
           )}
         </TabsContent>
 
         <TabsContent value="documents" className="space-y-4">
-          {isOfficer && (
-            <div className="flex justify-end">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <Select value={docCategory} onValueChange={setDocCategory}>
+              <SelectTrigger className="w-[160px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Categories</SelectItem>
+                <SelectItem value="minutes">Minutes</SelectItem>
+                <SelectItem value="agenda">Agenda</SelectItem>
+                <SelectItem value="guideline">Guideline</SelectItem>
+                <SelectItem value="other">Other</SelectItem>
+              </SelectContent>
+            </Select>
+            {isOfficer && (
               <Button size="sm" onClick={() => setUploadDialogOpen(true)}>
                 <Upload className="w-4 h-4 mr-2" />
                 Upload Document
               </Button>
-            </div>
-          )}
+            )}
+          </div>
           <Card>
             <CardContent className="pt-6 space-y-2">
-              {documents.length === 0 ? (
-                <p className="text-center text-muted-foreground py-8">No documents uploaded yet</p>
+              {visibleDocuments.length === 0 ? (
+                <p className="text-center text-muted-foreground py-8">No documents in this category</p>
               ) : (
-                documents.map((doc) => (
+                visibleDocuments.map((doc) => (
                   <div key={doc.id} className="flex items-center justify-between border rounded-lg p-3">
                     <button
                       onClick={() => handleDownloadDoc(doc.file_path)}
@@ -320,9 +379,25 @@ export default function CommitteeWorkspace({
               )}
             </CardContent>
           </Card>
+          {hasMoreDocs && docCategory === "all" && (
+            <div className="flex justify-center">
+              <Button variant="outline" size="sm" onClick={handleLoadMoreDocs} disabled={loadingMoreDocs}>
+                {loadingMoreDocs && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                Load older documents
+              </Button>
+            </div>
+          )}
         </TabsContent>
 
         <TabsContent value="roster" className="space-y-4">
+          {isOfficer && (
+            <div className="flex justify-end">
+              <Button size="sm" onClick={() => setAddMemberOpen(true)}>
+                <UserPlus className="w-4 h-4 mr-2" />
+                Add Member
+              </Button>
+            </div>
+          )}
           <Card>
             <CardContent className="pt-6 space-y-3">
               {[
@@ -332,15 +407,20 @@ export default function CommitteeWorkspace({
               ]
                 .filter(Boolean)
                 .map((entry: any) => (
-                  <div key={entry.p.id} className="flex items-center gap-3 border rounded-lg p-3">
-                    <Avatar className="w-10 h-10">
-                      <AvatarImage src={entry.p.avatar_url || "/placeholder.svg"} />
-                      <AvatarFallback>{initials(entry.p)}</AvatarFallback>
-                    </Avatar>
-                    <div>
-                      <p className="font-medium text-sm">{name(entry.p)}</p>
-                      <p className="text-xs text-muted-foreground">{entry.role}</p>
+                  <div key={entry.p.id} className="flex items-center justify-between gap-3 border rounded-lg p-3">
+                    <div className="flex items-center gap-3">
+                      <Avatar className="w-10 h-10">
+                        <AvatarImage src={entry.p.avatar_url || "/placeholder.svg"} />
+                        <AvatarFallback>{initials(entry.p)}</AvatarFallback>
+                      </Avatar>
+                      <div>
+                        <p className="font-medium text-sm">{name(entry.p)}</p>
+                        <p className="text-xs text-muted-foreground">{entry.role}</p>
+                      </div>
                     </div>
+                    {isOfficer && entry.role === "Member" && (
+                      <RemoveMemberButton committeeId={committee.id} memberId={entry.p.id} supabase={supabase} />
+                    )}
                   </div>
                 ))}
             </CardContent>
@@ -361,7 +441,204 @@ export default function CommitteeWorkspace({
         userId={userId}
         onUploaded={(doc) => setDocuments((prev) => [doc, ...prev])}
       />
+      <DescriptionDialog
+        open={descDialogOpen}
+        onOpenChange={setDescDialogOpen}
+        committee={committee}
+        onSaved={() => router.refresh()}
+      />
+      <AddMemberDialog
+        open={addMemberOpen}
+        onOpenChange={setAddMemberOpen}
+        committeeId={committee.id}
+        excludeIds={initialRoster.map((p) => p.id)}
+        onAdded={() => router.refresh()}
+      />
     </div>
+  )
+}
+
+function CaseCard({
+  committeeCase: c,
+  committeeId,
+  isOfficer,
+  onStatusChange,
+  onDownloadAttachment,
+  supabase,
+}: {
+  committeeCase: CommitteeCase
+  committeeId: string
+  isOfficer: boolean
+  onStatusChange: (id: string, status: string) => void
+  onDownloadAttachment: () => void
+  supabase: ReturnType<typeof createBrowserClient>
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const [notes, setNotes] = useState<CaseNote[] | null>(null)
+  const [loadingNotes, setLoadingNotes] = useState(false)
+  const [newNote, setNewNote] = useState("")
+  const [addingNote, setAddingNote] = useState(false)
+
+  async function loadNotes() {
+    setLoadingNotes(true)
+    try {
+      const { data } = await supabase
+        .from("committee_case_notes")
+        .select("id, note, created_at, author:author_id (first_name, last_name, avatar_url)")
+        .eq("case_id", c.id)
+        .order("created_at", { ascending: true })
+      setNotes((data as any) || [])
+    } finally {
+      setLoadingNotes(false)
+    }
+  }
+
+  async function handleToggle() {
+    const next = !expanded
+    setExpanded(next)
+    if (next && notes === null) await loadNotes()
+  }
+
+  async function handleAddNote() {
+    if (!newNote.trim()) return
+    setAddingNote(true)
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser()
+      if (!user) return
+      const { data } = await supabase
+        .from("committee_case_notes")
+        .insert({ case_id: c.id, committee_id: committeeId, author_id: user.id, note: newNote.trim() })
+        .select("id, note, created_at, author:author_id (first_name, last_name, avatar_url)")
+        .single()
+      if (data) setNotes((prev) => [...(prev || []), data as any])
+      setNewNote("")
+    } finally {
+      setAddingNote(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardContent className="pt-6 space-y-3">
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex items-center gap-3">
+            <Avatar className="w-8 h-8">
+              <AvatarImage src={c.submitter?.avatar_url || "/placeholder.svg"} />
+              <AvatarFallback>{initials(c.submitter)}</AvatarFallback>
+            </Avatar>
+            <div>
+              <p className="font-medium text-sm">{c.request_type}</p>
+              <p className="text-xs text-muted-foreground">
+                {name(c.submitter)} -- {new Date(c.created_at).toLocaleDateString()}
+              </p>
+            </div>
+          </div>
+          {isOfficer ? (
+            <Select value={c.status} onValueChange={(v) => onStatusChange(c.id, v)}>
+              <SelectTrigger className="w-[140px] h-8">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="open">Open</SelectItem>
+                <SelectItem value="in_progress">In Progress</SelectItem>
+                <SelectItem value="resolved">Resolved</SelectItem>
+              </SelectContent>
+            </Select>
+          ) : (
+            <Badge className={STATUS_COLORS[c.status]}>{c.status.replace("_", " ")}</Badge>
+          )}
+        </div>
+        <p className="text-sm">{c.message}</p>
+        <div className="flex items-center gap-2">
+          {c.attachment_path && (
+            <Button variant="outline" size="sm" onClick={onDownloadAttachment}>
+              <Paperclip className="w-4 h-4 mr-2" />
+              View Attachment
+            </Button>
+          )}
+          <Button variant="ghost" size="sm" onClick={handleToggle}>
+            {expanded ? <ChevronUp className="w-4 h-4 mr-1" /> : <ChevronDown className="w-4 h-4 mr-1" />}
+            Internal Notes
+          </Button>
+        </div>
+
+        {expanded && (
+          <div className="border-t pt-3 space-y-3">
+            {loadingNotes ? (
+              <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+            ) : notes && notes.length > 0 ? (
+              <div className="space-y-2">
+                {notes.map((n) => (
+                  <div key={n.id} className="flex gap-2 text-sm">
+                    <Avatar className="w-6 h-6 shrink-0">
+                      <AvatarImage src={n.author?.avatar_url || "/placeholder.svg"} />
+                      <AvatarFallback className="text-xs">{initials(n.author)}</AvatarFallback>
+                    </Avatar>
+                    <div>
+                      <p>
+                        <span className="font-medium">{name(n.author)}</span>{" "}
+                        <span className="text-xs text-muted-foreground">
+                          {new Date(n.created_at).toLocaleString()}
+                        </span>
+                      </p>
+                      <p className="text-muted-foreground">{n.note}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">No internal notes yet.</p>
+            )}
+
+            {isOfficer && (
+              <div className="flex gap-2">
+                <Textarea
+                  value={newNote}
+                  onChange={(e) => setNewNote(e.target.value.slice(0, 1000))}
+                  placeholder="Add an internal note (not visible to the submitter)..."
+                  rows={2}
+                  className="text-sm"
+                />
+                <Button size="sm" onClick={handleAddNote} disabled={addingNote || !newNote.trim()}>
+                  {addingNote ? <Loader2 className="w-4 h-4 animate-spin" /> : "Add"}
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function RemoveMemberButton({
+  committeeId,
+  memberId,
+  supabase,
+}: {
+  committeeId: string
+  memberId: string
+  supabase: ReturnType<typeof createBrowserClient>
+}) {
+  const router = useRouter()
+  const [removing, setRemoving] = useState(false)
+
+  async function handleRemove() {
+    setRemoving(true)
+    try {
+      await supabase.rpc("remove_committee_member", { p_committee_id: committeeId, p_member_id: memberId })
+      router.refresh()
+    } finally {
+      setRemoving(false)
+    }
+  }
+
+  return (
+    <Button variant="ghost" size="icon" onClick={handleRemove} disabled={removing}>
+      {removing ? <Loader2 className="w-4 h-4 animate-spin" /> : <X className="w-4 h-4" />}
+    </Button>
   )
 }
 
@@ -434,6 +711,155 @@ function MeetingInfoDialog({
             Save
           </Button>
         </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function DescriptionDialog({
+  open,
+  onOpenChange,
+  committee,
+  onSaved,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  committee: Committee
+  onSaved: () => void
+}) {
+  const supabase = createBrowserClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+  )
+  const [description, setDescription] = useState(committee.description || committee.purpose || "")
+  const [saving, setSaving] = useState(false)
+
+  async function handleSave() {
+    setSaving(true)
+    try {
+      await supabase.rpc("update_committee_description", {
+        p_committee_id: committee.id,
+        p_description: description.trim() || null,
+      })
+      onOpenChange(false)
+      onSaved()
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Edit Description</DialogTitle>
+        </DialogHeader>
+        <Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={4} />
+        <DialogFooter>
+          <Button onClick={handleSave} disabled={saving}>
+            {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+            Save
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function AddMemberDialog({
+  open,
+  onOpenChange,
+  committeeId,
+  excludeIds,
+  onAdded,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  committeeId: string
+  excludeIds: string[]
+  onAdded: () => void
+}) {
+  const supabase = createBrowserClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+  )
+  const [query, setQuery] = useState("")
+  const [results, setResults] = useState<Profile[]>([])
+  const [searching, setSearching] = useState(false)
+  const [addingId, setAddingId] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (query.trim().length < 2) {
+      setResults([])
+      return
+    }
+    const timeout = setTimeout(async () => {
+      setSearching(true)
+      try {
+        const { data } = await supabase
+          .from("profiles")
+          .select("id, first_name, last_name, avatar_url, arbiter_level")
+          .or(`first_name.ilike.%${query}%,last_name.ilike.%${query}%`)
+          .limit(10)
+        setResults((data || []).filter((p) => !excludeIds.includes(p.id)))
+      } finally {
+        setSearching(false)
+      }
+    }, 300)
+    return () => clearTimeout(timeout)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query])
+
+  async function handleAdd(memberId: string) {
+    setAddingId(memberId)
+    try {
+      await supabase.rpc("add_committee_member", { p_committee_id: committeeId, p_member_id: memberId })
+      onOpenChange(false)
+      setQuery("")
+      setResults([])
+      onAdded()
+    } finally {
+      setAddingId(null)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Add Committee Member</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground w-4 h-4" />
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search by name..."
+              className="pl-9"
+            />
+          </div>
+          <div className="space-y-2 max-h-64 overflow-y-auto">
+            {searching && <Loader2 className="w-4 h-4 animate-spin text-muted-foreground mx-auto" />}
+            {results.map((p) => (
+              <div key={p.id} className="flex items-center justify-between border rounded-lg p-2">
+                <div className="flex items-center gap-2">
+                  <Avatar className="w-8 h-8">
+                    <AvatarImage src={p.avatar_url || "/placeholder.svg"} />
+                    <AvatarFallback>{initials(p)}</AvatarFallback>
+                  </Avatar>
+                  <p className="text-sm font-medium">{name(p)}</p>
+                </div>
+                <Button size="sm" onClick={() => handleAdd(p.id)} disabled={addingId === p.id}>
+                  {addingId === p.id ? <Loader2 className="w-4 h-4 animate-spin" /> : "Add"}
+                </Button>
+              </div>
+            ))}
+            {!searching && query.trim().length >= 2 && results.length === 0 && (
+              <p className="text-sm text-muted-foreground text-center py-4">No matching arbiters found</p>
+            )}
+          </div>
+        </div>
       </DialogContent>
     </Dialog>
   )

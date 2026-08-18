@@ -13,7 +13,7 @@ export default async function CommitteePage() {
     redirect("/auth/login")
   }
 
-  const [{ data: committees }, { data: publicDocs }] = await Promise.all([
+  const [{ data: committees }, { data: publicDocs }, { data: myCases }] = await Promise.all([
     supabase
       .from("committees")
       .select(`
@@ -25,6 +25,15 @@ export default async function CommitteePage() {
       .eq("is_active", true)
       .order("name"),
     supabase.from("committee_documents").select("*").eq("is_public", true).order("created_at", { ascending: false }),
+    supabase
+      .from("committee_cases")
+      .select(`
+        id, request_type, message, status, resolution_note, created_at,
+        committee:committee_id (name)
+      `)
+      .eq("submitted_by", user.id)
+      .order("created_at", { ascending: false })
+      .limit(20),
   ])
 
   return (
@@ -32,6 +41,7 @@ export default async function CommitteePage() {
       userId={user.id}
       committees={(committees as any) || []}
       publicDocuments={publicDocs || []}
+      myCases={(myCases as any) || []}
     />
   )
 }
