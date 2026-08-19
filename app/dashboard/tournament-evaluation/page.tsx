@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Trophy, Star, Clock, Users, MapPin, Calendar, CheckCircle, AlertCircle, Loader2 } from "lucide-react"
+import { Trophy, Star, Clock, Users, MapPin, Calendar, CheckCircle, Loader2 } from "lucide-react"
 import { createBrowserClient } from "@supabase/ssr"
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
@@ -19,7 +19,7 @@ interface Tournament {
   venue: string
   city: string
   state: string
-  num_participants: number
+  current_participants: number
   role: string
   assignment_status: string
 }
@@ -77,7 +77,7 @@ export default function TournamentEvaluationPage() {
             venue,
             city,
             state,
-            max_participants
+            current_participants
           )
         `)
         .eq("arbiter_id", user.id)
@@ -95,80 +95,21 @@ export default function TournamentEvaluationPage() {
             venue: t.tournaments?.venue,
             city: t.tournaments?.city,
             state: t.tournaments?.state,
-            num_participants: t.tournaments?.max_participants,
+            current_participants: t.tournaments?.current_participants,
             role: t.role,
             assignment_status: t.assignment_status,
           })),
         )
       }
 
-      // Fetch evaluations
-      const { data: evaluationsData } = await supabase
-        .from("tournament_evaluations")
-        .select(`
-          id,
-          tournament_id,
-          overall_rating,
-          submitted_at,
-          tournaments (
-            name,
-            city,
-            start_date
-          )
-        `)
-        .eq("evaluator_id", user.id)
-        .order("submitted_at", { ascending: false })
-
-      if (evaluationsData) {
-        setEvaluations(
-          evaluationsData.map((e: any) => ({
-            id: e.id,
-            tournament_id: e.tournament_id,
-            tournament_name: e.tournaments?.name,
-            overall_rating: e.overall_rating,
-            start_date: e.tournaments?.start_date,
-            city: e.tournaments?.city,
-            created_at: e.submitted_at,
-          })),
-        )
-      }
-
+      await fetchEvaluations(user.id)
       setLoading(false)
     }
 
     fetchData()
   }, [router, supabase])
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case "pending":
-        return "bg-yellow-500/10 text-yellow-600 border-yellow-500/20"
-      case "completed":
-        return "bg-blue-500/10 text-blue-600 border-blue-500/20"
-      case "evaluated":
-        return "bg-green-500/10 text-green-600 border-green-500/20"
-      default:
-        return "bg-gray-500/10 text-gray-600 border-gray-500/20"
-    }
-  }
-
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case "pending":
-        return <Clock className="w-4 h-4" />
-      case "completed":
-        return <CheckCircle className="w-4 h-4" />
-      case "evaluated":
-        return <Star className="w-4 h-4" />
-      default:
-        return <AlertCircle className="w-4 h-4" />
-    }
-  }
-
   const pendingCount = tournaments.filter((t) => !evaluations.some((e) => e.tournament_id === t.tournament_id)).length
-  const completedCount = tournaments.filter((t) =>
-    evaluations.some((e) => e.tournament_id === t.tournament_id && !e.overall_rating),
-  ).length
   const evaluatedCount = evaluations.filter((e) => e.overall_rating).length
 
   const handleEvaluateClick = (tournament: Tournament) => {
@@ -177,16 +118,10 @@ export default function TournamentEvaluationPage() {
   }
 
   const handleEvaluationSuccess = () => {
-    // Refresh evaluations
-    fetchEvaluations()
+    if (userId) fetchEvaluations(userId)
   }
 
-  async function fetchEvaluations() {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
-    if (!user) return
-
+  async function fetchEvaluations(evaluatorId: string) {
     const { data: evaluationsData } = await supabase
       .from("tournament_evaluations")
       .select(`
@@ -200,7 +135,7 @@ export default function TournamentEvaluationPage() {
           start_date
         )
       `)
-      .eq("evaluator_id", user.id)
+      .eq("evaluator_id", evaluatorId)
       .order("submitted_at", { ascending: false })
 
     if (evaluationsData) {
@@ -253,8 +188,8 @@ export default function TournamentEvaluationPage() {
           <CardContent className="pt-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-muted-foreground">Completed</p>
-                <p className="text-2xl font-bold">{completedCount}</p>
+                <p className="text-sm font-medium text-muted-foreground">Total Officiated</p>
+                <p className="text-2xl font-bold">{tournaments.length}</p>
               </div>
               <CheckCircle className="h-8 w-8 text-blue-500" />
             </div>
@@ -293,7 +228,6 @@ export default function TournamentEvaluationPage() {
       <Tabs defaultValue="pending" className="space-y-4">
         <TabsList>
           <TabsTrigger value="pending">Pending Evaluation ({pendingCount})</TabsTrigger>
-          <TabsTrigger value="completed">Completed ({completedCount})</TabsTrigger>
           <TabsTrigger value="evaluated">Evaluated ({evaluatedCount})</TabsTrigger>
         </TabsList>
 
@@ -329,7 +263,7 @@ export default function TournamentEvaluationPage() {
                             </div>
                             <div className="flex items-center gap-1">
                               <Users className="w-4 h-4" />
-                              {tournament.num_participants} players
+                              {tournament.current_participants} players
                             </div>
                             <div>
                               <span>Role: {tournament.role}</span>
@@ -342,57 +276,6 @@ export default function TournamentEvaluationPage() {
                   ))
               ) : (
                 <p className="text-muted-foreground text-center py-8">No tournaments pending evaluation</p>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="completed" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Completed Evaluations</CardTitle>
-              <CardDescription>Tournaments with evaluations in progress</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {tournaments.filter((t) =>
-                evaluations.some((e) => e.tournament_id === t.tournament_id && !e.overall_rating),
-              ).length > 0 ? (
-                tournaments
-                  .filter((t) => evaluations.some((e) => e.tournament_id === t.tournament_id && !e.overall_rating))
-                  .map((tournament) => (
-                    <div key={tournament.id} className="border rounded-lg p-4 space-y-4">
-                      <div className="flex items-start justify-between">
-                        <div className="space-y-2">
-                          <div className="flex items-center gap-2">
-                            <h3 className="font-semibold">{tournament.name}</h3>
-                            <Badge className="bg-blue-500/10 text-blue-600">
-                              <CheckCircle className="w-4 h-4 mr-1" />
-                              In Progress
-                            </Badge>
-                          </div>
-                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm text-muted-foreground">
-                            <div className="flex items-center gap-1">
-                              <Calendar className="w-4 h-4" />
-                              {new Date(tournament.start_date).toLocaleDateString()}
-                            </div>
-                            <div className="flex items-center gap-1">
-                              <MapPin className="w-4 h-4" />
-                              {tournament.city}
-                            </div>
-                            <div className="flex items-center gap-1">
-                              <Users className="w-4 h-4" />
-                              {tournament.num_participants} players
-                            </div>
-                          </div>
-                        </div>
-                        <Button variant="outline" onClick={() => handleEvaluateClick(tournament)}>
-                          Continue Evaluation
-                        </Button>
-                      </div>
-                    </div>
-                  ))
-              ) : (
-                <p className="text-muted-foreground text-center py-8">No evaluations in progress</p>
               )}
             </CardContent>
           </Card>
