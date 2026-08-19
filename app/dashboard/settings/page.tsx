@@ -48,6 +48,7 @@ export default function SettingsPage() {
   const [saved, setSaved] = useState(false)
   const [profileError, setProfileError] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
+  const [zoneOptions, setZoneOptions] = useState<string[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Notification preferences state
@@ -96,6 +97,11 @@ export default function SettingsPage() {
 
       if (prefs) {
         setEmailNotifications(prefs.email_notifications)
+      }
+
+      const { data: zonesData } = await supabase.from("zones").select("name").order("name")
+      if (zonesData) {
+        setZoneOptions(zonesData.map((z) => z.name))
       }
 
       setLoading(false)
@@ -446,20 +452,7 @@ export default function SettingsPage() {
                       <SelectValue placeholder="Select zone" />
                     </SelectTrigger>
                     <SelectContent>
-                      {[
-                        "North",
-                        "South",
-                        "East",
-                        "West",
-                        "Central",
-                        "FCT",
-                        "North Central",
-                        "North East",
-                        "North West",
-                        "South East",
-                        "South South",
-                        "South West",
-                      ].map((z) => (
+                      {zoneOptions.map((z) => (
                         <SelectItem key={z} value={z}>
                           {z}
                         </SelectItem>
