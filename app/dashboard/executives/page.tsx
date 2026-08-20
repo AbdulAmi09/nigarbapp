@@ -3,25 +3,56 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Mail, Phone, MapPin, Calendar, Award, Users, FileText, ExternalLink } from "lucide-react"
+import { Mail, Phone, MapPin, Users, FileText } from "lucide-react"
 import { createClient } from "@/lib/supabase/server"
 import { redirect } from "next/navigation"
+import Link from "next/link"
 
-async function getExecutives(supabase: any) {
-  const { data: executives } = await supabase
-    .from("profiles")
-    .select("*")
-    .in("arbiter_level", ["International", "FIDE", "National", "Candidate"])
-    .eq("is_verified", true)
-    .order("created_at", { ascending: false })
-
-  return executives || []
+interface Executive {
+  id: string
+  first_name: string | null
+  last_name: string | null
+  avatar_url: string | null
+  email: string | null
+  phone: string | null
+  city: string | null
+  bio: string | null
+  arbiter_level: string | null
+  role: string
 }
 
-async function getCommittees(supabase: any) {
-  const { data: committees } = await supabase.from("committees").select("*").order("created_at", { ascending: false })
+interface Committee {
+  id: string
+  name: string
+  slug: string
+  chairman_name: string | null
+  secretary_name: string | null
+  member_count: number
+}
 
-  return committees || []
+const ROLE_LABELS: Record<string, string> = {
+  superadmin: "Super Admin",
+  admin: "Admin",
+}
+
+const ROLE_ORDER: Record<string, number> = {
+  superadmin: 0,
+  admin: 1,
+}
+
+async function getExecutives(supabase: Awaited<ReturnType<typeof createClient>>): Promise<Executive[]> {
+  const { data } = await supabase.rpc("get_executives")
+  const executives: Executive[] = data || []
+  return executives.sort((a, b) => {
+    const roleDiff = (ROLE_ORDER[a.role] ?? 99) - (ROLE_ORDER[b.role] ?? 99)
+    if (roleDiff !== 0) return roleDiff
+    return (a.first_name || "").localeCompare(b.first_name || "")
+  })
+}
+
+async function getCommittees(supabase: Awaited<ReturnType<typeof createClient>>): Promise<Committee[]> {
+  const { data } = await supabase.rpc("get_committees_with_leadership")
+  return data || []
 }
 
 export default async function ExecutivesPage() {
@@ -37,27 +68,6 @@ export default async function ExecutivesPage() {
 
   const executives = await getExecutives(supabase)
   const committees = await getCommittees(supabase)
-
-  const positions = [
-    "President",
-    "Vice President",
-    "General Secretary",
-    "Treasurer",
-    "Technical Director",
-    "Development Director",
-  ]
-
-  const getExecutiveData = (index: number, executive: any) => {
-    const titleMap: { [key: number]: string } = {
-      0: "President",
-      1: "Vice President",
-      2: "General Secretary",
-      3: "Treasurer",
-      4: "Technical Director",
-      5: "Development Director",
-    }
-    return titleMap[index % 6] || "Committee Member"
-  }
 
   const achievements = [
     { year: "2024", title: "FIDE Recognition", description: "NCAA received official recognition from FIDE." },
@@ -84,12 +94,12 @@ export default async function ExecutivesPage() {
       </div>
 
       {/* Summary Cards */}
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2">
         <Card>
           <CardContent className="pt-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-muted-foreground">Executive Members</p>
+                <p className="text-sm font-medium text-muted-foreground">Administrators</p>
                 <p className="text-2xl font-bold">{executives.length}</p>
               </div>
               <Users className="h-8 w-8 text-muted-foreground" />
@@ -108,30 +118,6 @@ export default async function ExecutivesPage() {
             </div>
           </CardContent>
         </Card>
-
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">Current Tenure</p>
-                <p className="text-2xl font-bold">2022-2026</p>
-              </div>
-              <Calendar className="h-8 w-8 text-muted-foreground" />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">Years of Service</p>
-                <p className="text-2xl font-bold">2</p>
-              </div>
-              <Award className="h-8 w-8 text-muted-foreground" />
-            </div>
-          </CardContent>
-        </Card>
       </div>
 
       <Tabs defaultValue="executives" className="space-y-4">
@@ -143,69 +129,63 @@ export default async function ExecutivesPage() {
 
         <TabsContent value="executives" className="space-y-4">
           <div className="grid gap-6 md:grid-cols-2">
-            {executives.map((executive, index) => (
-              <Card key={executive.id}>
+            {executives.length === 0 ? (
+              <Card className="md:col-span-2">
                 <CardContent className="pt-6">
-                  <div className="flex gap-4">
-                    <Avatar className="w-20 h-20">
-                      <AvatarImage src={executive.avatar_url || "/placeholder.svg"} alt={executive.first_name} />
-                      <AvatarFallback>
-                        {executive.first_name?.[0]}
-                        {executive.last_name?.[0]}
-                      </AvatarFallback>
-                    </Avatar>
-                    <div className="flex-1 space-y-3">
-                      <div>
-                        <h3 className="text-lg font-semibold">
-                          {executive.first_name} {executive.last_name}
-                        </h3>
-                        <div className="flex items-center gap-2 mt-1">
-                          <Badge variant="default">{getExecutiveData(index, executive)}</Badge>
-                          <Badge variant="outline">{executive.arbiter_level}</Badge>
-                        </div>
-                        <p className="text-sm text-muted-foreground mt-1">Tenure: 2022-2026</p>
-                      </div>
-
-                      <p className="text-sm text-muted-foreground">
-                        {executive.bio || "Chess administrator and arbiter"}
-                      </p>
-
-                      <div className="space-y-2">
-                        {executive.email && (
-                          <div className="flex items-center gap-1 text-sm text-muted-foreground">
-                            <Mail className="w-3 h-3" />
-                            {executive.email}
-                          </div>
-                        )}
-                        {executive.phone && (
-                          <div className="flex items-center gap-1 text-sm text-muted-foreground">
-                            <Phone className="w-3 h-3" />
-                            {executive.phone}
-                          </div>
-                        )}
-                        {executive.city && (
-                          <div className="flex items-center gap-1 text-sm text-muted-foreground">
-                            <MapPin className="w-3 h-3" />
-                            {executive.city}
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="flex gap-2">
-                        <Button variant="outline" size="sm">
-                          <Mail className="w-4 h-4 mr-2" />
-                          Contact
-                        </Button>
-                        <Button variant="outline" size="sm">
-                          <ExternalLink className="w-4 h-4 mr-2" />
-                          Profile
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
+                  <p className="text-center text-muted-foreground py-8">No administrators found</p>
                 </CardContent>
               </Card>
-            ))}
+            ) : (
+              executives.map((executive) => (
+                <Card key={executive.id}>
+                  <CardContent className="pt-6">
+                    <div className="flex gap-4">
+                      <Avatar className="w-20 h-20">
+                        <AvatarImage src={executive.avatar_url || "/placeholder.svg"} alt={executive.first_name || ""} />
+                        <AvatarFallback>
+                          {executive.first_name?.[0]}
+                          {executive.last_name?.[0]}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="flex-1 space-y-3">
+                        <div>
+                          <h3 className="text-lg font-semibold">
+                            {executive.first_name} {executive.last_name}
+                          </h3>
+                          <div className="flex items-center gap-2 mt-1">
+                            <Badge variant="default">{ROLE_LABELS[executive.role] || executive.role}</Badge>
+                            {executive.arbiter_level && <Badge variant="outline">{executive.arbiter_level}</Badge>}
+                          </div>
+                        </div>
+
+                        {executive.bio && <p className="text-sm text-muted-foreground">{executive.bio}</p>}
+
+                        <div className="space-y-2">
+                          {executive.email && (
+                            <div className="flex items-center gap-1 text-sm text-muted-foreground">
+                              <Mail className="w-3 h-3" />
+                              {executive.email}
+                            </div>
+                          )}
+                          {executive.phone && (
+                            <div className="flex items-center gap-1 text-sm text-muted-foreground">
+                              <Phone className="w-3 h-3" />
+                              {executive.phone}
+                            </div>
+                          )}
+                          {executive.city && (
+                            <div className="flex items-center gap-1 text-sm text-muted-foreground">
+                              <MapPin className="w-3 h-3" />
+                              {executive.city}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))
+            )}
           </div>
         </TabsContent>
 
@@ -215,27 +195,16 @@ export default async function ExecutivesPage() {
               <Card key={committee.id}>
                 <CardHeader>
                   <CardTitle>{committee.name}</CardTitle>
-                  <CardDescription>Committee Details</CardDescription>
+                  <CardDescription>
+                    {committee.member_count} member{committee.member_count === 1 ? "" : "s"}
+                    {committee.chairman_name ? ` · Chair: ${committee.chairman_name}` : ""}
+                    {committee.secretary_name ? ` · Secretary: ${committee.secretary_name}` : ""}
+                  </CardDescription>
                 </CardHeader>
-                <CardContent className="space-y-4">
-                  <div>
-                    <h4 className="font-medium mb-2">Committee Members:</h4>
-                    <div className="flex flex-wrap gap-2">
-                      {(committee.members || []).slice(0, 5).map((member: string, idx: number) => (
-                        <Badge key={idx} variant="outline">
-                          {member}
-                        </Badge>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button variant="outline" size="sm">
-                      View Details
-                    </Button>
-                    <Button variant="outline" size="sm">
-                      Meeting Schedule
-                    </Button>
-                  </div>
+                <CardContent>
+                  <Button variant="outline" size="sm" asChild>
+                    <Link href={`/dashboard/committee/${committee.slug}`}>View Details</Link>
+                  </Button>
                 </CardContent>
               </Card>
             ))}
