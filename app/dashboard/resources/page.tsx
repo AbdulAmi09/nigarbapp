@@ -1,13 +1,13 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { BookOpen, Download, Search, Filter, FileText, Video, Link, Star, Calendar, Eye, Loader2 } from "lucide-react"
+import { BookOpen, Download, Search, Filter, FileText, Video, Link, Calendar, Loader2 } from "lucide-react"
 import { createBrowserClient } from "@supabase/ssr"
 
 const supabase = createBrowserClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!)
@@ -21,7 +21,6 @@ interface Resource {
   format: string
   size: string
   downloads: number
-  rating: number
   date: string
   featured: boolean
   url: string
@@ -54,10 +53,9 @@ export default function ResourcesPage() {
         type: getResourceType(resource.file_type),
         category: resource.category || "general",
         description: resource.description || "",
-        format: resource.file_type?.toUpperCase() || "PDF",
+        format: resource.file_type ? resource.file_type.toUpperCase() : "Unknown",
         size: formatFileSize(resource.file_size),
         downloads: resource.download_count || 0,
-        rating: 4.5,
         date: new Date(resource.created_at).toLocaleDateString("en-US", { month: "short", year: "numeric" }),
         featured: resource.is_featured || false,
         url: resource.file_url || "#",
@@ -85,39 +83,6 @@ export default function ResourcesPage() {
     const i = Math.floor(Math.log(bytes) / Math.log(1024))
     return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${sizes[i]}`
   }
-
-  const categories = [
-    {
-      name: "Rules & Regulations",
-      count: resources.filter((r) => r.category === "Rules & Regulations").length,
-      color: "bg-primary/10 text-primary",
-    },
-    {
-      name: "Training Materials",
-      count: resources.filter((r) => r.category === "Training Materials").length,
-      color: "bg-blue-500/10 text-blue-600",
-    },
-    {
-      name: "Forms & Documents",
-      count: resources.filter((r) => r.category === "Forms & Documents").length,
-      color: "bg-green-500/10 text-green-600",
-    },
-    {
-      name: "Guidelines",
-      count: resources.filter((r) => r.category === "Guidelines").length,
-      color: "bg-purple-500/10 text-purple-600",
-    },
-    {
-      name: "Software",
-      count: resources.filter((r) => r.category === "Software").length,
-      color: "bg-orange-500/10 text-orange-600",
-    },
-    {
-      name: "Videos",
-      count: resources.filter((r) => r.category === "Videos").length,
-      color: "bg-pink-500/10 text-pink-600",
-    },
-  ]
 
   const getTypeIcon = (type: string) => {
     switch (type) {
@@ -158,6 +123,15 @@ export default function ResourcesPage() {
     return categoryMap[category] || "bg-gray-500/10 text-gray-600"
   }
 
+  const categories = useMemo(() => {
+    const names = Array.from(new Set(resources.map((r) => r.category).filter(Boolean))).sort()
+    return names.map((name) => ({
+      name,
+      count: resources.filter((r) => r.category === name).length,
+      color: getCategoryColor(name),
+    }))
+  }, [resources])
+
   const filteredResources = resources.filter((resource) => {
     const matchesSearch =
       resource.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -167,14 +141,29 @@ export default function ResourcesPage() {
     return matchesSearch && matchesType && matchesCategory
   })
 
+  const hasFile = (resource: Resource) => Boolean(resource.url) && resource.url !== "#"
+
   const handleDownload = async (resource: Resource) => {
+    if (!hasFile(resource)) return
     // Increment download count (RPC bypasses the author-only RLS restriction)
     await supabase.rpc("increment_resource_downloads", { p_resource_id: resource.id })
+    window.open(resource.url, "_blank")
+  }
 
-    // Open download URL
-    if (resource.url && resource.url !== "#") {
-      window.open(resource.url, "_blank")
+  const renderDownloadButton = (resource: Resource, label = "Download") => {
+    if (!hasFile(resource)) {
+      return (
+        <Button size="sm" variant="outline" disabled>
+          Not Available Yet
+        </Button>
+      )
     }
+    return (
+      <Button size="sm" onClick={() => handleDownload(resource)}>
+        <Download className="w-4 h-4 mr-2" />
+        {label}
+      </Button>
+    )
   }
 
   if (loading) {
@@ -187,17 +176,11 @@ export default function ResourcesPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-balance">Resources</h1>
-          <p className="text-muted-foreground text-pretty">
-            Access official documents, training materials, and educational resources for chess arbiters.
-          </p>
-        </div>
-        <Button>
-          <BookOpen className="w-4 h-4 mr-2" />
-          Request Resource
-        </Button>
+      <div>
+        <h1 className="text-3xl font-bold text-balance">Resources</h1>
+        <p className="text-muted-foreground text-pretty">
+          Access official documents, training materials, and educational resources for chess arbiters.
+        </p>
       </div>
 
       {/* Summary Cards */}
@@ -308,12 +291,11 @@ export default function ResourcesPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Categories</SelectItem>
-                  <SelectItem value="Rules & Regulations">Rules & Regulations</SelectItem>
-                  <SelectItem value="Training Materials">Training Materials</SelectItem>
-                  <SelectItem value="Forms & Documents">Forms & Documents</SelectItem>
-                  <SelectItem value="Guidelines">Guidelines</SelectItem>
-                  <SelectItem value="Software">Software</SelectItem>
-                  <SelectItem value="Videos">Videos</SelectItem>
+                  {categories.map((category) => (
+                    <SelectItem key={category.name} value={category.name}>
+                      {category.name}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
               <Button
@@ -378,7 +360,7 @@ export default function ResourcesPage() {
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm text-muted-foreground">
+                      <div className="grid grid-cols-3 gap-4 text-sm text-muted-foreground">
                         <div>
                           <span className="font-medium">Format:</span> {resource.format}
                         </div>
@@ -389,10 +371,6 @@ export default function ResourcesPage() {
                           <Download className="w-3 h-3" />
                           <span>{resource.downloads}</span>
                         </div>
-                        <div className="flex items-center gap-1">
-                          <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
-                          <span>{resource.rating}</span>
-                        </div>
                       </div>
 
                       <div className="flex items-center justify-between pt-2 border-t">
@@ -400,16 +378,7 @@ export default function ResourcesPage() {
                           <Calendar className="w-3 h-3" />
                           <span>Updated: {resource.date}</span>
                         </div>
-                        <div className="flex gap-2">
-                          <Button variant="outline" size="sm">
-                            <Eye className="w-4 h-4 mr-2" />
-                            Preview
-                          </Button>
-                          <Button size="sm" onClick={() => handleDownload(resource)}>
-                            <Download className="w-4 h-4 mr-2" />
-                            Download
-                          </Button>
-                        </div>
+                        <div className="flex gap-2">{renderDownloadButton(resource)}</div>
                       </div>
                     </div>
                   </CardContent>
@@ -460,16 +429,7 @@ export default function ResourcesPage() {
                             <Calendar className="w-3 h-3" />
                             <span>Updated: {resource.date}</span>
                           </div>
-                          <div className="flex gap-2">
-                            <Button variant="outline" size="sm">
-                              <Eye className="w-4 h-4 mr-2" />
-                              Preview
-                            </Button>
-                            <Button size="sm" onClick={() => handleDownload(resource)}>
-                              <Download className="w-4 h-4 mr-2" />
-                              Download
-                            </Button>
-                          </div>
+                          <div className="flex gap-2">{renderDownloadButton(resource)}</div>
                         </div>
                       </div>
                     </CardContent>
@@ -511,10 +471,7 @@ export default function ResourcesPage() {
                           <div className="text-sm text-muted-foreground">
                             {resource.format} - {resource.size}
                           </div>
-                          <Button size="sm" onClick={() => handleDownload(resource)}>
-                            <Download className="w-4 h-4 mr-2" />
-                            Download
-                          </Button>
+                          {renderDownloadButton(resource)}
                         </div>
                       </div>
                     </CardContent>
@@ -556,10 +513,7 @@ export default function ResourcesPage() {
                           <div className="text-sm text-muted-foreground">
                             {resource.format} - {resource.size}
                           </div>
-                          <Button size="sm" onClick={() => handleDownload(resource)}>
-                            <Eye className="w-4 h-4 mr-2" />
-                            Watch
-                          </Button>
+                          {renderDownloadButton(resource, "Watch")}
                         </div>
                       </div>
                     </CardContent>
