@@ -7,7 +7,8 @@ import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Trophy, Calendar, MapPin, Users, Clock, Star, Filter, Search, Plus, Loader2, Check } from "lucide-react"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Trophy, Calendar, MapPin, Users, Clock, Search, Loader2, Check, FileText } from "lucide-react"
 import { createBrowserClient } from "@supabase/ssr"
 import { useRouter } from "next/navigation"
 
@@ -17,18 +18,17 @@ interface Event {
   id: string
   title: string
   type: string
-  category: string
   date: string
   location: string
   organizer: string
   participants: number
   maxAttendees: number | null
-  registrationDeadline: string
+  registrationDeadline: string | null
   fee: string
   feeAmount: number
   status: string
   description: string
-  prizes: string
+  materialsUrl: string | null
 }
 
 interface Registration {
@@ -47,6 +47,7 @@ export default function EventsPage() {
   const [searchTerm, setSearchTerm] = useState("")
   const [typeFilter, setTypeFilter] = useState("all")
   const [statusFilter, setStatusFilter] = useState("all")
+  const [detailsEvent, setDetailsEvent] = useState<Event | null>(null)
 
   useEffect(() => {
     fetchEvents()
@@ -62,33 +63,28 @@ export default function EventsPage() {
         setUserEmail(user.email || "")
       }
 
-      const { data, error } = await supabase.from("events").select("*").order("start_date", { ascending: true })
+      const { data, error } = await supabase.rpc("get_events_with_organizer")
 
       if (error) throw error
 
-      const formattedEvents: Event[] = (data || []).map((event: any) => ({
-        id: event.id,
-        title: event.title,
-        type: event.event_type || "Event",
-        category: event.event_type || "General",
-        date: formatDateRange(event.start_date, event.end_date),
-        location: [event.venue, event.city, event.state].filter(Boolean).join(", ") || "TBD",
-        organizer: "NCAA",
-        participants: event.current_attendees || 0,
-        maxAttendees: event.max_attendees ?? null,
-        registrationDeadline: event.registration_deadline
-          ? new Date(event.registration_deadline).toLocaleDateString("en-US", {
-              month: "short",
-              day: "numeric",
-              year: "numeric",
-            })
-          : "TBD",
-        fee: event.registration_fee ? `₦${Number(event.registration_fee).toLocaleString()}` : "Free",
-        feeAmount: Number(event.registration_fee) || 0,
-        status: getEventStatus(event.start_date, event.end_date),
-        description: event.description || "",
-        prizes: event.materials_url || "Certificates available",
-      }))
+      const formattedEvents: Event[] = (data || [])
+        .sort((a: any, b: any) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime())
+        .map((event: any) => ({
+          id: event.id,
+          title: event.title,
+          type: event.event_type || "Event",
+          date: formatDateRange(event.start_date, event.end_date),
+          location: [event.venue, event.city, event.state].filter(Boolean).join(", ") || "TBD",
+          organizer: event.organizer_name || "NCAA",
+          participants: event.current_attendees || 0,
+          maxAttendees: event.max_attendees ?? null,
+          registrationDeadline: event.registration_deadline,
+          fee: event.registration_fee ? `₦${Number(event.registration_fee).toLocaleString()}` : "Free",
+          feeAmount: Number(event.registration_fee) || 0,
+          status: getEventStatus(event.start_date, event.end_date, event.registration_deadline),
+          description: event.description || "",
+          materialsUrl: event.materials_url || null,
+        }))
 
       setEvents(formattedEvents)
 
@@ -218,14 +214,15 @@ export default function EventsPage() {
     return `${start.toLocaleDateString("en-US", { month: "short", day: "numeric" })}-${end.toLocaleDateString("en-US", { day: "numeric", year: "numeric" })}`
   }
 
-  const getEventStatus = (startDate: string, endDate: string) => {
+  const getEventStatus = (startDate: string, endDate: string, registrationDeadline: string | null) => {
     const now = new Date()
     const start = new Date(startDate)
     const end = endDate ? new Date(endDate) : start
 
-    if (now < start) return "open"
     if (now >= start && now <= end) return "ongoing"
-    return "completed"
+    if (now > end) return "completed"
+    if (registrationDeadline && now > new Date(registrationDeadline)) return "closed"
+    return "open"
   }
 
   const getStatusColor = (status: string) => {
@@ -309,6 +306,36 @@ export default function EventsPage() {
     )
   }
 
+  const renderActions = (event: Event) => {
+    if (event.status === "open") {
+      return (
+        <>
+          {renderRegisterButton(event, "Register Now")}
+          <Button variant="outline" className="w-full bg-transparent" onClick={() => setDetailsEvent(event)}>
+            View Details
+          </Button>
+        </>
+      )
+    }
+    if (event.status === "closed") {
+      return (
+        <>
+          <Button className="w-full" variant="outline" disabled>
+            Registration Closed
+          </Button>
+          <Button variant="outline" className="w-full bg-transparent" onClick={() => setDetailsEvent(event)}>
+            View Details
+          </Button>
+        </>
+      )
+    }
+    return (
+      <Button variant="outline" className="w-full bg-transparent" onClick={() => setDetailsEvent(event)}>
+        View Details
+      </Button>
+    )
+  }
+
   const filteredEvents = events.filter((event) => {
     const matchesSearch =
       event.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -317,6 +344,91 @@ export default function EventsPage() {
     const matchesStatus = statusFilter === "all" || event.status === statusFilter
     return matchesSearch && matchesType && matchesStatus
   })
+
+  const renderEventCard = (event: Event) => (
+    <Card key={event.id}>
+      <CardContent className="pt-6">
+        <div className="flex flex-col lg:flex-row gap-6">
+          <div className="flex-1 space-y-4">
+            <div className="flex items-start justify-between">
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <h3 className="text-xl font-semibold">{event.title}</h3>
+                  <Badge className={getStatusColor(event.status)}>{event.status}</Badge>
+                </div>
+                <div className="flex items-center gap-2 mb-3">
+                  <Badge className={getTypeColor(event.type)}>{event.type}</Badge>
+                </div>
+                <p className="text-muted-foreground mb-3">{event.description || "No description available"}</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+              <div className="flex items-center gap-2">
+                <Calendar className="w-4 h-4 text-muted-foreground" />
+                <span>{event.date}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <MapPin className="w-4 h-4 text-muted-foreground" />
+                <span>{event.location}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Users className="w-4 h-4 text-muted-foreground" />
+                <span>{event.participants} participants</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Clock className="w-4 h-4 text-muted-foreground" />
+                <span>
+                  Deadline:{" "}
+                  {event.registrationDeadline
+                    ? new Date(event.registrationDeadline).toLocaleDateString("en-US", {
+                        month: "short",
+                        day: "numeric",
+                        year: "numeric",
+                      })
+                    : "None"}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between pt-2 border-t">
+              <div className="flex items-center gap-4 text-sm">
+                <span className="font-medium">Fee: {event.fee}</span>
+                <span className="text-muted-foreground">Organizer: {event.organizer}</span>
+              </div>
+              {event.materialsUrl && (
+                <a
+                  href={event.materialsUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-sm text-primary hover:underline flex items-center gap-1"
+                >
+                  <FileText className="w-4 h-4" />
+                  Materials
+                </a>
+              )}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2 lg:w-48">{renderActions(event)}</div>
+        </div>
+      </CardContent>
+    </Card>
+  )
+
+  const renderList = (list: Event[], emptyMessage: string) => (
+    <div className="space-y-4">
+      {list.length === 0 ? (
+        <Card>
+          <CardContent className="pt-6">
+            <p className="text-center text-muted-foreground py-8">{emptyMessage}</p>
+          </CardContent>
+        </Card>
+      ) : (
+        list.map(renderEventCard)
+      )}
+    </div>
+  )
 
   if (loading) {
     return (
@@ -328,17 +440,11 @@ export default function EventsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-balance">Events & Programs</h1>
-          <p className="text-muted-foreground text-pretty">
-            Discover and participate in NCAA tournaments, training programs, and special events.
-          </p>
-        </div>
-        <Button>
-          <Plus className="w-4 h-4 mr-2" />
-          Submit Event
-        </Button>
+      <div>
+        <h1 className="text-3xl font-bold text-balance">Events & Programs</h1>
+        <p className="text-muted-foreground text-pretty">
+          Discover and participate in NCAA tournaments, training programs, and special events.
+        </p>
       </div>
 
       {/* Summary Cards */}
@@ -372,11 +478,9 @@ export default function EventsPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-muted-foreground">Training Programs</p>
-                <p className="text-2xl font-bold">
-                  {events.filter((e) => e.type === "Training").length}
-                </p>
+                <p className="text-2xl font-bold">{events.filter((e) => e.type === "Training").length}</p>
               </div>
-              <Star className="h-8 w-8 text-muted-foreground" />
+              <Clock className="h-8 w-8 text-muted-foreground" />
             </div>
           </CardContent>
         </Card>
@@ -430,13 +534,11 @@ export default function EventsPage() {
                 <SelectContent>
                   <SelectItem value="all">All Status</SelectItem>
                   <SelectItem value="open">Open</SelectItem>
+                  <SelectItem value="closed">Closed</SelectItem>
                   <SelectItem value="ongoing">Ongoing</SelectItem>
                   <SelectItem value="completed">Completed</SelectItem>
                 </SelectContent>
               </Select>
-              <Button variant="outline" size="icon">
-                <Filter className="w-4 h-4" />
-              </Button>
             </div>
           </div>
         </CardContent>
@@ -450,241 +552,74 @@ export default function EventsPage() {
         </TabsList>
 
         <TabsContent value="all" className="space-y-4">
-          <div className="space-y-4">
-            {filteredEvents.length === 0 ? (
-              <Card>
-                <CardContent className="pt-6">
-                  <p className="text-center text-muted-foreground py-8">No events found</p>
-                </CardContent>
-              </Card>
-            ) : (
-              filteredEvents.map((event) => (
-                <Card key={event.id}>
-                  <CardContent className="pt-6">
-                    <div className="flex flex-col lg:flex-row gap-6">
-                      <div className="flex-1 space-y-4">
-                        <div className="flex items-start justify-between">
-                          <div>
-                            <div className="flex items-center gap-2 mb-2">
-                              <h3 className="text-xl font-semibold">{event.title}</h3>
-                              <Badge className={getStatusColor(event.status)}>{event.status}</Badge>
-                            </div>
-                            <div className="flex items-center gap-2 mb-3">
-                              <Badge className={getTypeColor(event.type)}>{event.type}</Badge>
-                            </div>
-                            <p className="text-muted-foreground mb-3">
-                              {event.description || "No description available"}
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                          <div className="flex items-center gap-2">
-                            <Calendar className="w-4 h-4 text-muted-foreground" />
-                            <span>{event.date}</span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <MapPin className="w-4 h-4 text-muted-foreground" />
-                            <span>{event.location}</span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Users className="w-4 h-4 text-muted-foreground" />
-                            <span>{event.participants} participants</span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Clock className="w-4 h-4 text-muted-foreground" />
-                            <span>Deadline: {event.registrationDeadline}</span>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center justify-between pt-2 border-t">
-                          <div className="flex items-center gap-4 text-sm">
-                            <span className="font-medium">Fee: {event.fee}</span>
-                            <span className="text-muted-foreground">Organizer: {event.organizer}</span>
-                          </div>
-                          <div className="text-sm text-muted-foreground">
-                            <Trophy className="w-4 h-4 inline mr-1" />
-                            {event.prizes}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="flex flex-col gap-2 lg:w-48">
-                        {event.status === "open" && (
-                          <>
-                            {renderRegisterButton(event, "Register Now")}
-                            <Button variant="outline" className="w-full bg-transparent">
-                              View Details
-                            </Button>
-                          </>
-                        )}
-                        {event.status === "ongoing" && (
-                          <>
-                            <Button variant="outline" className="w-full bg-transparent">
-                              View Results
-                            </Button>
-                            <Button variant="outline" className="w-full bg-transparent">
-                              Live Updates
-                            </Button>
-                          </>
-                        )}
-                        {(event.status === "closed" || event.status === "completed") && (
-                          <Button variant="outline" className="w-full bg-transparent">
-                            View Details
-                          </Button>
-                        )}
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))
-            )}
-          </div>
+          {renderList(filteredEvents, "No events found")}
         </TabsContent>
 
         <TabsContent value="tournaments" className="space-y-4">
-          <div className="space-y-4">
-            {filteredEvents.filter((e) => e.type === "Tournament").length === 0 ? (
-              <Card>
-                <CardContent className="pt-6">
-                  <p className="text-center text-muted-foreground py-8">No tournaments found</p>
-                </CardContent>
-              </Card>
-            ) : (
-              filteredEvents
-                .filter((e) => e.type === "Tournament")
-                .map((event) => (
-                  <Card key={event.id}>
-                    <CardContent className="pt-6">
-                      <div className="flex flex-col lg:flex-row gap-6">
-                        <div className="flex-1 space-y-4">
-                          <div>
-                            <div className="flex items-center gap-2 mb-2">
-                              <h3 className="text-xl font-semibold">{event.title}</h3>
-                              <Badge className={getStatusColor(event.status)}>{event.status}</Badge>
-                            </div>
-                            <p className="text-muted-foreground mb-3">{event.description}</p>
-                          </div>
-
-                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                            <div className="flex items-center gap-2">
-                              <Calendar className="w-4 h-4 text-muted-foreground" />
-                              <span>{event.date}</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <MapPin className="w-4 h-4 text-muted-foreground" />
-                              <span>{event.location}</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Users className="w-4 h-4 text-muted-foreground" />
-                              <span>{event.participants} participants</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Trophy className="w-4 h-4 text-muted-foreground" />
-                              <span>{event.prizes}</span>
-                            </div>
-                          </div>
-
-                          <div className="flex items-center justify-between pt-2 border-t">
-                            <div className="flex items-center gap-4 text-sm">
-                              <span className="font-medium">Entry Fee: {event.fee}</span>
-                              <span className="text-muted-foreground">Deadline: {event.registrationDeadline}</span>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="flex flex-col gap-2 lg:w-48">
-                          {event.status === "open" && (
-                            <>
-                              {renderRegisterButton(event, "Register")}
-                              <Button variant="outline" className="w-full bg-transparent">
-                                Tournament Info
-                              </Button>
-                            </>
-                          )}
-                          {event.status === "ongoing" && (
-                            <>
-                              <Button variant="outline" className="w-full bg-transparent">
-                                Live Standings
-                              </Button>
-                              <Button variant="outline" className="w-full bg-transparent">
-                                Pairings
-                              </Button>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))
-            )}
-          </div>
+          {renderList(filteredEvents.filter((e) => e.type === "Tournament"), "No tournaments found")}
         </TabsContent>
 
         <TabsContent value="training" className="space-y-4">
-          <div className="space-y-4">
-            {filteredEvents.filter((e) => e.type === "Training" || e.type === "Workshop")
-              .length === 0 ? (
-              <Card>
-                <CardContent className="pt-6">
-                  <p className="text-center text-muted-foreground py-8">No training programs found</p>
-                </CardContent>
-              </Card>
-            ) : (
-              filteredEvents
-                .filter((e) => e.type === "Training" || e.type === "Workshop")
-                .map((event) => (
-                  <Card key={event.id}>
-                    <CardContent className="pt-6">
-                      <div className="flex flex-col lg:flex-row gap-6">
-                        <div className="flex-1 space-y-4">
-                          <div>
-                            <div className="flex items-center gap-2 mb-2">
-                              <h3 className="text-xl font-semibold">{event.title}</h3>
-                              <Badge className={getStatusColor(event.status)}>{event.status}</Badge>
-                            </div>
-                            <Badge className={getTypeColor(event.type)}>{event.type}</Badge>
-                            <p className="text-muted-foreground mt-3">{event.description}</p>
-                          </div>
-
-                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                            <div className="flex items-center gap-2">
-                              <Calendar className="w-4 h-4 text-muted-foreground" />
-                              <span>{event.date}</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <MapPin className="w-4 h-4 text-muted-foreground" />
-                              <span>{event.location}</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Users className="w-4 h-4 text-muted-foreground" />
-                              <span>{event.participants} participants</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Star className="w-4 h-4 text-muted-foreground" />
-                              <span>{event.prizes}</span>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="flex flex-col gap-2 lg:w-48">
-                          {event.status === "open" && (
-                            <>
-                              {renderRegisterButton(event, "Register")}
-                              <Button variant="outline" className="w-full bg-transparent">
-                                Program Details
-                              </Button>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))
-            )}
-          </div>
+          {renderList(
+            filteredEvents.filter((e) => e.type === "Training" || e.type === "Workshop"),
+            "No training programs found",
+          )}
         </TabsContent>
       </Tabs>
+
+      <Dialog open={detailsEvent !== null} onOpenChange={(open) => !open && setDetailsEvent(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{detailsEvent?.title}</DialogTitle>
+            <DialogDescription>Event details</DialogDescription>
+          </DialogHeader>
+          {detailsEvent && (
+            <div className="space-y-3 text-sm">
+              <div className="flex items-center gap-2">
+                <Badge className={getTypeColor(detailsEvent.type)}>{detailsEvent.type}</Badge>
+                <Badge className={getStatusColor(detailsEvent.status)}>{detailsEvent.status}</Badge>
+              </div>
+              {detailsEvent.description && <p>{detailsEvent.description}</p>}
+              <div className="grid grid-cols-2 gap-y-2">
+                <span className="text-muted-foreground">Date</span>
+                <span>{detailsEvent.date}</span>
+                <span className="text-muted-foreground">Location</span>
+                <span>{detailsEvent.location}</span>
+                <span className="text-muted-foreground">Organizer</span>
+                <span>{detailsEvent.organizer}</span>
+                <span className="text-muted-foreground">Fee</span>
+                <span>{detailsEvent.fee}</span>
+                <span className="text-muted-foreground">Participants</span>
+                <span>
+                  {detailsEvent.participants}
+                  {detailsEvent.maxAttendees ? ` / ${detailsEvent.maxAttendees}` : ""}
+                </span>
+                <span className="text-muted-foreground">Registration Deadline</span>
+                <span>
+                  {detailsEvent.registrationDeadline
+                    ? new Date(detailsEvent.registrationDeadline).toLocaleDateString("en-US", {
+                        month: "short",
+                        day: "numeric",
+                        year: "numeric",
+                      })
+                    : "None"}
+                </span>
+              </div>
+              {detailsEvent.materialsUrl && (
+                <a
+                  href={detailsEvent.materialsUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-primary hover:underline flex items-center gap-1"
+                >
+                  <FileText className="w-4 h-4" />
+                  View Materials
+                </a>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
