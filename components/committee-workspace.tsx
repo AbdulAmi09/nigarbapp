@@ -169,19 +169,29 @@ export default function CommitteeWorkspace({
     setLoadingMoreCases(true)
     try {
       const oldest = cases[cases.length - 1].created_at
-      const { data } = await supabase
-        .from("committee_cases")
-        .select(`
-          id, request_type, message, status, attachment_path, resolution_note, created_at, resolved_at,
-          submitter:submitted_by (first_name, last_name, avatar_url)
-        `)
-        .eq("committee_id", committee.id)
-        .lt("created_at", oldest)
-        .order("created_at", { ascending: false })
-        .limit(PAGE_SIZE)
+      const { data } = await supabase.rpc("get_committee_cases_with_submitter", {
+        p_committee_id: committee.id,
+        p_before: oldest,
+        p_limit: PAGE_SIZE,
+      })
 
       if (data) {
-        setCases((prev) => [...prev, ...(data as any)])
+        const mapped: CommitteeCase[] = data.map((c: any) => ({
+          id: c.id,
+          request_type: c.request_type,
+          message: c.message,
+          status: c.status,
+          attachment_path: c.attachment_path,
+          resolution_note: c.resolution_note,
+          created_at: c.created_at,
+          resolved_at: c.resolved_at,
+          submitter: {
+            first_name: c.submitter_first_name,
+            last_name: c.submitter_last_name,
+            avatar_url: c.submitter_avatar_url,
+          },
+        }))
+        setCases((prev) => [...prev, ...mapped])
         setHasMoreCases(data.length === PAGE_SIZE)
       }
     } finally {
@@ -482,12 +492,14 @@ function CaseCard({
   async function loadNotes() {
     setLoadingNotes(true)
     try {
-      const { data } = await supabase
-        .from("committee_case_notes")
-        .select("id, note, created_at, author:author_id (first_name, last_name, avatar_url)")
-        .eq("case_id", c.id)
-        .order("created_at", { ascending: true })
-      setNotes((data as any) || [])
+      const { data } = await supabase.rpc("get_committee_case_notes", { p_case_id: c.id })
+      const mapped: CaseNote[] = (data || []).map((n: any) => ({
+        id: n.id,
+        note: n.note,
+        created_at: n.created_at,
+        author: { first_name: n.author_first_name, last_name: n.author_last_name, avatar_url: n.author_avatar_url },
+      }))
+      setNotes(mapped)
     } finally {
       setLoadingNotes(false)
     }
@@ -784,31 +796,32 @@ function AddMemberDialog({
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
   )
   const [query, setQuery] = useState("")
-  const [results, setResults] = useState<Profile[]>([])
+  const [directory, setDirectory] = useState<Profile[]>([])
   const [searching, setSearching] = useState(false)
   const [addingId, setAddingId] = useState<string | null>(null)
 
   useEffect(() => {
-    if (query.trim().length < 2) {
-      setResults([])
-      return
-    }
-    const timeout = setTimeout(async () => {
-      setSearching(true)
-      try {
-        const { data } = await supabase
-          .from("profiles")
-          .select("id, first_name, last_name, avatar_url, arbiter_level")
-          .or(`first_name.ilike.%${query}%,last_name.ilike.%${query}%`)
-          .limit(10)
-        setResults((data || []).filter((p) => !excludeIds.includes(p.id)))
-      } finally {
+    if (!open) return
+    setSearching(true)
+    supabase
+      .rpc("get_zone_directory")
+      .then(({ data }: { data: Profile[] | null }) => {
+        setDirectory(data || [])
         setSearching(false)
-      }
-    }, 300)
-    return () => clearTimeout(timeout)
+      })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query])
+  }, [open])
+
+  const results =
+    query.trim().length < 2
+      ? []
+      : directory
+          .filter(
+            (p) =>
+              !excludeIds.includes(p.id) &&
+              `${p.first_name || ""} ${p.last_name || ""}`.toLowerCase().includes(query.trim().toLowerCase()),
+          )
+          .slice(0, 10)
 
   async function handleAdd(memberId: string) {
     setAddingId(memberId)
@@ -816,7 +829,6 @@ function AddMemberDialog({
       await supabase.rpc("add_committee_member", { p_committee_id: committeeId, p_member_id: memberId })
       onOpenChange(false)
       setQuery("")
-      setResults([])
       onAdded()
     } finally {
       setAddingId(null)

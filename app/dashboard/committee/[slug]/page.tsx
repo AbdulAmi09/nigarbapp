@@ -35,21 +35,9 @@ export default async function CommitteeWorkspacePage({ params }: { params: { slu
     redirect("/dashboard/committee")
   }
 
-  const rosterIds = [committee.chairman_id, committee.secretary_id, ...(committee.member_ids || [])].filter(
-    Boolean,
-  ) as string[]
-
-  const [{ data: roster }, { data: cases }, { data: documents }] = await Promise.all([
-    supabase.from("profiles").select("id, first_name, last_name, avatar_url, arbiter_level").in("id", rosterIds),
-    supabase
-      .from("committee_cases")
-      .select(`
-        id, request_type, message, status, attachment_path, resolution_note, created_at, resolved_at,
-        submitter:submitted_by (first_name, last_name, avatar_url)
-      `)
-      .eq("committee_id", committee.id)
-      .order("created_at", { ascending: false })
-      .limit(20),
+  const [{ data: roster }, { data: rawCases }, { data: documents }] = await Promise.all([
+    supabase.rpc("get_committee_roster", { p_committee_id: committee.id }),
+    supabase.rpc("get_committee_cases_with_submitter", { p_committee_id: committee.id, p_limit: 20 }),
     supabase
       .from("committee_documents")
       .select("*")
@@ -58,6 +46,22 @@ export default async function CommitteeWorkspacePage({ params }: { params: { slu
       .limit(20),
   ])
 
+  const cases = (rawCases || []).map((c: any) => ({
+    id: c.id,
+    request_type: c.request_type,
+    message: c.message,
+    status: c.status,
+    attachment_path: c.attachment_path,
+    resolution_note: c.resolution_note,
+    created_at: c.created_at,
+    resolved_at: c.resolved_at,
+    submitter: {
+      first_name: c.submitter_first_name,
+      last_name: c.submitter_last_name,
+      avatar_url: c.submitter_avatar_url,
+    },
+  }))
+
   return (
     <CommitteeWorkspace
       committee={committee}
@@ -65,7 +69,7 @@ export default async function CommitteeWorkspacePage({ params }: { params: { slu
       role={isChairman ? "Chairman" : isSecretary ? "Secretary" : "Member"}
       isOfficer={isChairman || isSecretary}
       roster={roster || []}
-      cases={(cases as any) || []}
+      cases={cases}
       documents={documents || []}
     />
   )

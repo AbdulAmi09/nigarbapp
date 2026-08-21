@@ -21,12 +21,6 @@ import Link from "next/link"
 import { createBrowserClient } from "@supabase/ssr"
 import { useRouter } from "next/navigation"
 
-interface Person {
-  first_name: string | null
-  last_name: string | null
-  avatar_url: string | null
-}
-
 interface Committee {
   id: string
   name: string
@@ -40,8 +34,11 @@ interface Committee {
   chairman_id: string | null
   secretary_id: string | null
   request_types: string[]
-  chairman: Person | null
-  secretary: Person | null
+  chairman_name: string | null
+  chairman_avatar_url: string | null
+  secretary_name: string | null
+  secretary_avatar_url: string | null
+  member_count: number
 }
 
 interface CommitteeDocument {
@@ -69,23 +66,12 @@ const CASE_STATUS_COLORS: Record<string, string> = {
   resolved: "bg-green-500/10 text-green-600",
 }
 
-function personName(p: Person | null) {
-  if (!p) return null
-  const name = `${p.first_name || ""} ${p.last_name || ""}`.trim()
-  return name || null
-}
-
-function initials(p: Person | null) {
-  const name = personName(p)
+function initials(name: string | null) {
   if (!name) return "?"
   return name
     .split(" ")
     .map((n) => n[0])
     .join("")
-}
-
-function memberCount(c: Committee) {
-  return (c.member_ids?.length || 0) + (c.chairman_id ? 1 : 0) + (c.secretary_id ? 1 : 0)
 }
 
 export default function CommitteeDirectoryPanel({
@@ -175,7 +161,7 @@ export default function CommitteeDirectoryPanel({
                 <CardContent className="space-y-4">
                   <div className="flex items-center gap-1 text-sm text-muted-foreground">
                     <Users className="w-4 h-4" />
-                    {memberCount(committee)} active board members
+                    {committee.member_count} active board members
                   </div>
                   <Button variant="outline" size="sm" onClick={() => setDetailsCommittee(committee)}>
                     View Details
@@ -268,16 +254,16 @@ function CommitteeDetailsModal({
                 <h3 className="text-sm font-medium mb-3">Committee Officers</h3>
                 <div className="grid gap-3 sm:grid-cols-2">
                   {[
-                    { person: committee.chairman, role: "Chairman" },
-                    { person: committee.secretary, role: "Secretary" },
-                  ].map(({ person, role }) => (
+                    { name: committee.chairman_name, avatarUrl: committee.chairman_avatar_url, role: "Chairman" },
+                    { name: committee.secretary_name, avatarUrl: committee.secretary_avatar_url, role: "Secretary" },
+                  ].map(({ name, avatarUrl, role }) => (
                     <div key={role} className="flex items-center gap-3 border rounded-lg p-3">
                       <Avatar className="w-10 h-10">
-                        <AvatarImage src={person?.avatar_url || "/placeholder.svg"} />
-                        <AvatarFallback>{initials(person)}</AvatarFallback>
+                        <AvatarImage src={avatarUrl || "/placeholder.svg"} />
+                        <AvatarFallback>{initials(name)}</AvatarFallback>
                       </Avatar>
                       <div>
-                        <p className="font-medium text-sm">{personName(person) || "Position vacant"}</p>
+                        <p className="font-medium text-sm">{name || "Position vacant"}</p>
                         <p className="text-xs text-muted-foreground">{role}</p>
                       </div>
                     </div>

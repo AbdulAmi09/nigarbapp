@@ -14,16 +14,7 @@ export default async function CommitteePage() {
   }
 
   const [{ data: committees }, { data: publicDocs }, { data: myCases }] = await Promise.all([
-    supabase
-      .from("committees")
-      .select(`
-        id, name, slug, description, purpose, meeting_schedule, next_meeting_date, meeting_location,
-        member_ids, chairman_id, secretary_id, request_types,
-        chairman:chairman_id (first_name, last_name, avatar_url),
-        secretary:secretary_id (first_name, last_name, avatar_url)
-      `)
-      .eq("is_active", true)
-      .order("name"),
+    supabase.rpc("get_committees_with_leadership"),
     supabase.from("committee_documents").select("*").eq("is_public", true).order("created_at", { ascending: false }),
     supabase
       .from("committee_cases")
@@ -36,10 +27,12 @@ export default async function CommitteePage() {
       .limit(20),
   ])
 
+  const sortedCommittees = [...(committees || [])].sort((a: any, b: any) => a.name.localeCompare(b.name))
+
   return (
     <CommitteeDirectoryPanel
       userId={user.id}
-      committees={(committees as any) || []}
+      committees={sortedCommittees}
       publicDocuments={publicDocs || []}
       myCases={(myCases as any) || []}
     />
