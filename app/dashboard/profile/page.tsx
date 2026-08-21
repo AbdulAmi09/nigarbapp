@@ -70,19 +70,16 @@ export default function ProfilePage() {
         return
       }
 
-      // Get user profile
-      const { data: profileData } = await supabase.from("profiles").select("*").eq("id", user.id).single()
-
-      // Get performance metrics
-      const { data: statsData } = await supabase.rpc("get_arbiter_activity_summary", { arbiter_uuid: user.id }).single()
-
-      // Get tournament history
-      const { data: assignmentsData } = await supabase
-        .from("assignment_details")
-        .select("*")
-        .eq("arbiter_id", user.id)
-        .order("created_at", { ascending: false })
-        .limit(10)
+      const [{ data: profileData }, { data: statsData }, { data: assignmentsData }] = await Promise.all([
+        supabase.from("profiles").select("*").eq("id", user.id).single(),
+        supabase.rpc("get_arbiter_activity_summary", { arbiter_uuid: user.id }).single<Stats>(),
+        supabase
+          .from("assignment_details")
+          .select("*")
+          .eq("arbiter_id", user.id)
+          .order("created_at", { ascending: false })
+          .limit(10),
+      ])
 
       setProfile(profileData)
       setStats(statsData)
@@ -114,8 +111,7 @@ export default function ProfilePage() {
       }
 
       const fileExt = file.name.split(".").pop()
-      const fileName = `${profile.id}-avatar.${fileExt}`
-      const filePath = `avatars/${fileName}`
+      const filePath = `avatars/${profile.id}/avatar.${fileExt}`
 
       const { error: uploadError } = await supabase.storage.from("avatars").upload(filePath, file, { upsert: true })
 
@@ -294,7 +290,7 @@ export default function ProfilePage() {
 
         <TabsContent value="achievements" className="space-y-4">
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {stats?.total_assignments >= 100 && (
+            {(stats?.total_assignments || 0) >= 100 && (
               <Card>
                 <CardContent className="pt-6">
                   <div className="flex flex-col items-center text-center space-y-2">

@@ -198,8 +198,7 @@ export default function SettingsPage() {
     try {
       const previousUrl = profile.avatar_url
       const fileExt = file.name.split(".").pop()
-      const fileName = `${profile.id}-${Date.now()}.${fileExt}`
-      const filePath = `avatars/${fileName}`
+      const filePath = `avatars/${profile.id}/${Date.now()}.${fileExt}`
 
       const { error: uploadError } = await supabase.storage.from("avatars").upload(filePath, file, { upsert: true })
 
