@@ -33,22 +33,27 @@ interface ArbiterStats {
 
 async function getDashboardData(userId: string) {
   const supabase = await createClient()
-
-  const { data: profile } = await supabase.from("profiles").select("*").eq("id", userId).single()
-
-  const { data: stats } = await supabase
-    .rpc("get_arbiter_activity_summary", { arbiter_uuid: userId })
-    .single<ArbiterStats>()
-
   const today = new Date().toISOString().split("T")[0]
 
-  const { data: upcoming } = await supabase
-    .from("assignment_details")
-    .select("*")
-    .eq("arbiter_id", userId)
-    .gte("start_date", today)
-    .order("start_date", { ascending: true })
-    .limit(5)
+  const [{ data: profile }, { data: stats }, { data: upcoming }, { data: notifications }, { data: unreadRows }] =
+    await Promise.all([
+      supabase.from("profiles").select("*").eq("id", userId).single(),
+      supabase.rpc("get_arbiter_activity_summary", { arbiter_uuid: userId }).single<ArbiterStats>(),
+      supabase
+        .from("assignment_details")
+        .select("*")
+        .eq("arbiter_id", userId)
+        .gte("start_date", today)
+        .order("start_date", { ascending: true })
+        .limit(5),
+      supabase
+        .from("notifications")
+        .select("*")
+        .eq("recipient_id", userId)
+        .order("created_at", { ascending: false })
+        .limit(5),
+      supabase.from("unread_messages").select("unread_count").eq("user_id", userId),
+    ])
 
   let assignments = upcoming || []
   let assignmentsMode: "upcoming" | "recent" = "upcoming"
@@ -64,14 +69,6 @@ async function getDashboardData(userId: string) {
     assignmentsMode = "recent"
   }
 
-  const { data: notifications } = await supabase
-    .from("notifications")
-    .select("*")
-    .eq("recipient_id", userId)
-    .order("created_at", { ascending: false })
-    .limit(5)
-
-  const { data: unreadRows } = await supabase.from("unread_messages").select("unread_count").eq("user_id", userId)
   const unreadChatCount = (unreadRows || []).reduce((sum, r: any) => sum + (r.unread_count || 0), 0)
 
   return { profile, stats, assignments, assignmentsMode, notifications, unreadChatCount }
