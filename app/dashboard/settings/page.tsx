@@ -83,23 +83,20 @@ export default function SettingsPage() {
         return
       }
 
-      const { data } = await supabase.from("profiles").select("*").eq("id", user.id).single()
+      const [{ data }, { data: prefs }, { data: zonesData }] = await Promise.all([
+        supabase.from("profiles").select("*").eq("id", user.id).single(),
+        supabase.from("notification_preferences").select("*").eq("user_id", user.id).maybeSingle(),
+        supabase.from("zones").select("name").order("name"),
+      ])
 
       if (data) {
         setProfile({ ...data, email: user.email })
       }
 
-      const { data: prefs } = await supabase
-        .from("notification_preferences")
-        .select("*")
-        .eq("user_id", user.id)
-        .maybeSingle()
-
       if (prefs) {
         setEmailNotifications(prefs.email_notifications)
       }
 
-      const { data: zonesData } = await supabase.from("zones").select("name").order("name")
       if (zonesData) {
         setZoneOptions(zonesData.map((z) => z.name))
       }
