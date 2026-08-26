@@ -1,12 +1,36 @@
 import { createClient } from "@/lib/supabase/server"
+import { createClient as createSupabaseClient } from "@supabase/supabase-js"
 import { type NextRequest, NextResponse } from "next/server"
+
+// The web app authenticates via cookies (createClient() from
+// lib/supabase/server), which the mobile app's session can't provide. The
+// NCAA Arbiters Expo app instead sends its Supabase access token as a
+// bearer header; validating it against a plain (non-SSR) client scoped to
+// that token gets the same RLS-enforced behavior as the cookie path below,
+// just over a different transport.
+async function getAuthedRequest(request: NextRequest) {
+  const authHeader = request.headers.get("authorization")
+  if (authHeader?.startsWith("Bearer ")) {
+    const token = authHeader.slice(7)
+    const supabase = createSupabaseClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, {
+      global: { headers: { Authorization: `Bearer ${token}` } },
+    })
+    const {
+      data: { user },
+    } = await supabase.auth.getUser(token)
+    return { supabase, user, isMobile: true }
+  }
+
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  return { supabase, user, isMobile: false }
+}
 
 export async function POST(request: NextRequest) {
   try {
-    const supabase = await createClient()
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
+    const { supabase, user, isMobile } = await getAuthedRequest(request)
 
     if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
@@ -42,7 +66,9 @@ export async function POST(request: NextRequest) {
       body: JSON.stringify({
         email: user.email,
         amount: Math.round(Number(payment.amount) * 100), // Paystack expects amount in kobo
-        callback_url: `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/dashboard/payments/callback`,
+        callback_url: isMobile
+          ? "ncaamobile://payments/callback"
+          : `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/dashboard/payments/callback`,
         metadata: {
           payment_id,
           user_id: user.id,

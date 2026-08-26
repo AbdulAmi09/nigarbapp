@@ -84,15 +84,52 @@ function escapeHtml(value: string) {
     .replace(/'/g, "&#39;")
 }
 
+async function sendExpoPush(tokens: string[], title: string, body: string, actionUrl?: string) {
+  if (tokens.length === 0) return
+
+  const messages = tokens.map((to) => ({
+    to,
+    title,
+    body,
+    data: actionUrl ? { url: actionUrl } : undefined,
+  }))
+
+  const response = await fetch("https://exp.host/--/api/v2/push/send", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(messages),
+  })
+
+  const result = await response.json().catch(() => null)
+  const tickets = Array.isArray(result?.data) ? result.data : []
+
+  const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!)
+  await Promise.allSettled(
+    tickets.map((ticket: any, i: number) => {
+      // DeviceNotRegistered means the app was uninstalled or the token
+      // rotated -- Expo will never deliver to it again, so drop it instead
+      // of retrying it on every future notification forever.
+      if (ticket?.status === "error" && ticket?.details?.error === "DeviceNotRegistered") {
+        return supabase.rpc("delete_device_push_token", { p_expo_push_token: tokens[i] })
+      }
+      return Promise.resolve()
+    }),
+  )
+}
+
 export async function POST(request: NextRequest) {
   const secret = request.headers.get("x-webhook-secret")
   if (!process.env.NOTIFICATIONS_WEBHOOK_SECRET || secret !== process.env.NOTIFICATIONS_WEBHOOK_SECRET) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  const { email, title, message, action_url, push_subscriptions } = await request.json()
+  const { email, title, message, action_url, push_subscriptions, expo_push_tokens } = await request.json()
 
   const tasks: Promise<any>[] = []
+
+  if (Array.isArray(expo_push_tokens) && expo_push_tokens.length > 0) {
+    tasks.push(sendExpoPush(expo_push_tokens, title || "New notification", message || "", action_url))
+  }
 
   if (email && process.env.RESEND_API_KEY) {
     const resend = new Resend(process.env.RESEND_API_KEY)
