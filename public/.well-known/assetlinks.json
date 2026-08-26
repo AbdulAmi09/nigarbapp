@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.amisuabdul.ncaamobile",
+      "sha256_cert_fingerprints": [
+        "B9:E4:81:D8:16:9D:C2:AA:D1:4F:19:70:29:DA:A2:FE:6B:13:1B:FF:64:48:84:1B:C5:2D:DB:F9:1B:4A:33:E5"
+      ]
+    }
+  }
+]
