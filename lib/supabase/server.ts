@@ -1,6 +1,9 @@
 import { createServerClient } from "@supabase/ssr"
 import { cookies } from "next/headers"
 
+// See lib/supabase/client.ts for why this is conditional.
+const cookieDomain = process.env.NEXT_PUBLIC_COOKIE_DOMAIN || undefined
+
 /**
  * Especially important if using Fluid compute: Don't put this client in a
  * global variable. Always create a new client within each function when using
@@ -10,6 +13,7 @@ export async function createClient() {
   const cookieStore = await cookies()
 
   return createServerClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, {
+    cookieOptions: cookieDomain ? { domain: cookieDomain } : undefined,
     cookies: {
       getAll() {
         return cookieStore.getAll()
